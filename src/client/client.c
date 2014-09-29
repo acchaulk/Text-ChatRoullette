@@ -23,11 +23,11 @@
 // supported commands
 #define CONNECT "connect"
 #define CHAT "chat"
-#define QUIT "quit"
 #define TRANSFER "transfer"
 #define FLAG "flag"
 #define HELP "help"
 #define QUIT "quit"
+#define EXIT "exit"
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -44,7 +44,6 @@ int connect_to_server(char *hostname, char *port) {
 
     // TODO: use hostname instead of ip address
 
-	printf("Connecting to %s : %s\n", hostname, port);
 	int sockfd, numbytes;  
 	char buf[MAXDATASIZE];
 	struct addrinfo hints, *servinfo, *p;
@@ -70,31 +69,12 @@ int connect_to_server(char *hostname, char *port) {
 			continue;
 		}
 
-		fcntl(sockfd, F_SETFL, O_NONBLOCK);
-
 		if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-		    if (errno != EINPROGRESS) { /* EINPORGRESS is expected */
-				close(sockfd);
-				perror("client: connect");
-				continue;
-			}
+			close(sockfd);
+			perror("client: connect");
+			continue;
 		}
 
-		FD_ZERO(&fdset);
-		FD_SET(sockfd, &fdset);
-		tv.tv_sec = 10;             /* 10 second timeout */
-		tv.tv_usec = 0;
-
-		if (select(sockfd + 1, NULL, &fdset, NULL, &tv) == 1) {
-			int so_error;
-			socklen_t len = sizeof so_error;
-
-			getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len);
-
-			if (so_error == 0) {
-				printf("%s:%s is open\n", hostname, port);
-			}
-		} 
 		break;
 	}
 
@@ -122,6 +102,16 @@ int connect_to_server(char *hostname, char *port) {
 	return 0;
 }
 
+void print_ascii_art() {
+	printf("\n");
+	printf("Welcome to Chat Roullette v1.0\n");
+	printf("\n");
+    printf("╔═╗┬ ┬┌─┐┌┬┐  ╦═╗┌─┐┬ ┬┬  ┬  ┌─┐┌┬┐┌┬┐┌─┐\n");
+	printf("║  ├─┤├─┤ │   ╠╦╝│ ││ ││  │  ├┤  │  │ ├┤ \n");
+	printf("╚═╝┴ ┴┴ ┴ ┴   ╩╚═└─┘└─┘┴─┘┴─┘└─┘ ┴  ┴ └─┘\n");
+	printf("\n");
+}
+
 int main(int argc, char *argv[])
 {
 	char user_input[INPUTSIZE], input_copy[INPUTSIZE];
@@ -130,7 +120,7 @@ int main(int argc, char *argv[])
 	char delim[2] = " "; 
 	char **parameters;
 
-	printf("Welcome to Text ChatRoullette v0.1\n");
+	print_ascii_art();
 
 	while (1) {
 	    printf("> ");
@@ -151,12 +141,24 @@ int main(int argc, char *argv[])
 					count++;
 			}
 			if (count != 2) {
-				printf("Connect only accpet 2 parameters: connect hostname port\n");
+				printf("Usage: connect [hostname] [port]\n");
 				continue;
 			}
 			connect_to_server(parameters[1], parameters[2]);
-		} else if (strcmp(token, QUIT) == 0) {
+		} else if (strcmp(token, EXIT) == 0) { /* exit */
             exit(1);
+		} else if (strcmp(token, HELP) == 0) { /* help */
+		    printf("%-10s - connect to TRS server.\n", CONNECT);
+		    printf("%-10s - chat with a random client in the common chat channel.\n", CHAT);
+			printf("%-10s - transfer file to current chatting partner.\n", TRANSFER);
+			printf("%-10s - report to TRS server current chatting partner is misbehaving\n", FLAG);
+			printf("%-10s - print help information.\n", HELP);
+			printf("%-10s - quit current channel.\n", QUIT);
+			printf("%-10s - quit client.\n", EXIT);
+			continue;
+		} else {
+            printf("%s: Command not found. Type 'help' for more information.\n", token);
+			continue;
 		}
 
 	}
