@@ -11,6 +11,7 @@ PWD := $(shell pwd;cd)
 TOPDIR := $(PWD)
 SRC_DIR := $(TOPDIR)/src
 OBJ_DIR := $(TOPDIR)/obj
+INCLUDE_DIR := $(SRC_DIR)/include
 CLIENT_SRC_DIR := $(SRC_DIR)/client
 SERVER_SRC_DIR := $(SRC_DIR)/server
 CLIENT_OBJ_DIR := $(OBJ_DIR)/client
@@ -31,6 +32,8 @@ LIBS :=
 
 CLIENT_TARGET := client
 SERVER_TARGET := server
+
+CFLAGS := -g -I$(INCLUDE_DIR)
 
 all: dir client server
 
