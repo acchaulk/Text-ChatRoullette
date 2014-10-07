@@ -166,7 +166,6 @@ int main(int argc, char *argv[])
 	int connected = 0; /* 0 means unconnected, 1 means connected*/
 	int sockfd = -1;
     char *token;
-    char **parameters;
     char delim[2] = " "; 
     int count = 0;
 
@@ -186,16 +185,15 @@ int main(int argc, char *argv[])
 		if (strcmp(token, CONNECT) == 0) {
 			/* connect */
 			while (token != NULL) {
-				parameters[count] = token;
 				token = strtok(NULL, delim);
 				if (token != NULL)
 					count++;
 			}
-			if (count != 2) {
-				printf("Usage: connect [hostname] [port]\n");
+			if (count != 1) {
+				printf("Usage: connect [hostname]\n");
 				continue;
 			}
-			sockfd = handle_connect(parameters[1], parameters[2]);
+			sockfd = handle_connect(token, PORT);
 		} else if (strcmp(token, CHAT) == 0) {
 			/* chat */
 			handle_chat(sockfd);
