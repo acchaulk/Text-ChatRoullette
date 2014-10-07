@@ -7,12 +7,12 @@ struct chat_pair {
    char *partner_name;
    int partner_index;
    int channel;
-   struct chat_pair *next;
 };
 
 struct client_info {
    char *name;
    int sockfd;
+   int partner_index;
 };
 
 #define BUF_MAX 256 // max size for client data

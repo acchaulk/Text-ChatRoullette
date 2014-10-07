@@ -96,7 +96,7 @@ int handle_connect(char *hostname, char *port) {
 
     token = strtok(buf, ":");
 	if (strcmp(token, ACK) != 0) {
-		printf("expected %s but recv invalid control message %s ", ACK, buf);
+		printf("expected %s but recv invalid control message: %s \n", ACK, buf);
 		return -1;
 	}
 	token = strtok(NULL, ":");
@@ -141,7 +141,7 @@ int handle_chat(int sockfd) {
     buf[numbytes] ='\0';
     token = strtok(buf, ":");
     if (strcmp(token, IN_SESSION) != 0) {
-    	printf("expected %s but recv invalid control message %s ", IN_SESSION, buf);
+    	printf("expected %s but recv invalid control message: %s \n", IN_SESSION, buf);
     	return -1;
     }
     token = strtok(NULL, ":");
