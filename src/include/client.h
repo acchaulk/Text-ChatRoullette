@@ -13,6 +13,7 @@ struct client_info {
    char *name;
    int sockfd;
    int partner_index;
+   int in_session; /* 1 for in session, 0 for not in session */
 };
 
 #define BUF_MAX 256 // max size for client data

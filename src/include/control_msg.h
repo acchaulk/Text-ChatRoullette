@@ -5,4 +5,7 @@
 #define CHAT_REQUEST "chat_request"
 #define IN_SESSION "in_session"
 
+#define TRUE 1
+#define FALSE 0
+
 #endif

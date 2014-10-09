@@ -33,7 +33,7 @@ LIBS :=
 CLIENT_TARGET := client
 SERVER_TARGET := server
 
-CFLAGS := -g -I$(INCLUDE_DIR)
+CFLAGS := -g -I$(INCLUDE_DIR) -pthread
 
 all: dir client server
 

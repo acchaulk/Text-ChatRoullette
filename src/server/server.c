@@ -105,7 +105,7 @@ void cleanup() {
 
 /* return 0 if connection sets up, otherwise return -1 */
 int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
-		struct client_info *ci_list [], int *ci_size, fd_set *bitmap) {
+		struct client_info *clients [], int *client_num, fd_set *bitmap) {
     int new_fd;
 	socklen_t addrlen;
 	struct sockaddr_storage their_addr; // connector's address information
@@ -129,13 +129,13 @@ int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
 			   "socket %d\n", remoteIP, new_fd);
 		
 		// Acks client and increment current index
-		return send_ack(new_fd, ci_list,  bitmap);
+		return send_ack(new_fd, clients, client_num, bitmap);
 	}
 }
 
 // Acks client and create a queue to keep track of clients
 // TODO: synchronization
-int send_ack(int sockfd, struct client_info *ci_list [], fd_set *bitmap) {
+int send_ack(int sockfd, struct client_info * clients[], int *client_num, fd_set *bitmap) {
 	struct client_info *node = NULL;
 	char *buf;
 	char ackbuf[BUF_MAX];
@@ -164,28 +164,28 @@ int send_ack(int sockfd, struct client_info *ci_list [], fd_set *bitmap) {
 	node->name = buf;
 	node->sockfd = sockfd;
 	node->partner_index = -1;
-	ci_list[i] = node;
+	clients[i] = node;
 
 	sprintf(ackbuf, "%s:%s", ACK, node->name);
 	if (send(sockfd, ackbuf, strlen(ackbuf), 0) == -1) {
 		perror("ack fails");
 		return -1;
 	}
+	(*client_num)++;
 	return 0;
 }
 
 struct client_info* find_partner(int sockfd,
-		struct client_info *ci_list[], int ci_size,
-		struct chat_pair *cp_list[], fd_set *bitmap) {
+		struct client_info *clients[], int ci_size, fd_set *bitmap)
+{
     int i, r;
     struct client_info *self = NULL;
-    struct chat_pair *cp = malloc(sizeof(struct chat_pair));
 
     // find self
     for (i = 0; i < CLIENT_MAX; i++) {
 	    if (FD_ISSET(i, bitmap)) {
-            if (ci_list[i]->sockfd == sockfd) {
-				self = ci_list[i];
+            if (clients[i]->sockfd == sockfd) {
+				self = clients[i];
 				break;
 			}
         }
@@ -204,17 +204,18 @@ struct client_info* find_partner(int sockfd,
     }
     while (r == i || !FD_ISSET(r, bitmap));
 	self->partner_index = r;
-	ci_list[r]->partner_index = i;
+	clients[r]->partner_index = i;
 
     return self;
 }
 
 struct client_info * handle_client_data(int sockfd, fd_set *master,
-		struct client_info *ci_list [], int ci_size,
-		struct chat_pair *cp_list [], fd_set *bitmap) {
+		struct client_info *clients [], int client_num,
+		fd_set *bitmap)
+{
 	int nbytes;
 	char buf[BUF_MAX]; // buffer for client data
-	struct client_info *ci;
+	struct client_info *client;
 	struct client_info *partner;
 
 	if ((nbytes = recv(sockfd, buf, sizeof buf, 0)) <= 0) {
@@ -231,56 +232,65 @@ struct client_info * handle_client_data(int sockfd, fd_set *master,
 	} else {
 		buf[nbytes] = '\0';
 		if (strcmp(buf, CHAT_REQUEST) == 0) {
-			// find a random partner
-			ci = find_partner(sockfd, ci_list, ci_size, cp_list, bitmap);
-			if (ci->partner_index == -1) {
-				printf("%s want to chat but there is no other user right now.\n", ci->name);
+			// find a random partner and connect with the client who send the quest
+			client = find_partner(sockfd, clients, client_num, bitmap);
+			if (client->partner_index == -1) {
+				printf("%s want to chat but there is no other user right now.\n", client->name);
 				return NULL;
 			}
-			partner = ci_list[ci->partner_index];
+			partner = clients[client->partner_index];
 			// send IN_SESSION command to both clients
 			memset(&buf, 0, nbytes);
 			sprintf(buf, "%s:%s", IN_SESSION, partner->name);
-			if (send(ci->sockfd, buf, strlen(buf), 0) == -1) {
-				perror("send IN_SESSION fails");
-				return NULL;
+			if (FD_ISSET(client->sockfd, master)) {
+				if (send(client->sockfd, buf, strlen(buf), 0) == -1) {
+					perror("send IN_SESSION fails");
+					return NULL;
+				}
 			}
+			client->in_session = TRUE;
 			memset(&buf, 0, nbytes);
-			sprintf(buf, "%s:%s", IN_SESSION, ci->name);
-			if (send(partner->sockfd, buf, strlen(buf), 0) == -1) {
-				perror("send IN_SESSION fails");
-				return NULL;
+			sprintf(buf, "%s:%s", IN_SESSION, client->name);
+			if (FD_ISSET(partner->sockfd, master)) {
+				if (send(partner->sockfd, buf, strlen(buf), 0) == -1) {
+					perror("send IN_SESSION fails");
+					return NULL;
+				}
 			}
-			return ci;
+			partner->in_session = TRUE;
+			return partner;
+		} else {
+			printf("expected %s but recv invalid control message: %s \n", CHAT_REQUEST, buf);
+			return NULL;
 		}
 	}
 }
 
 int main(void) {
-    int sockfd;
+    int listener_fd;
 	int fdmax;
 	fd_set master;   // master file descriptor list
 	fd_set read_fds; // tmp file descriptor list for select
-	int i, j;
-	struct client_info* ci_list[CLIENT_MAX];
-	int ci_size = 0;  // current # of client list
-	struct chat_pair* cp_list[CHANNEL_MAX];
-	struct chat_pair *cp;
 	fd_set bitmap;  // hack for chat channel
+	int i, j;
+	struct client_info* clients[CLIENT_MAX];
+	int client_num = 0;  // # of clients currently log in
 
 	// reap all dead processes
 	cleanup();
 
+	FD_ZERO(&master);    // clear the master and temp sets
+	FD_ZERO(&read_fds);
+	FD_ZERO(&bitmap);
+
     // create socket and listen on it 
-	sockfd = setup();
+	listener_fd = setup();
 
     // add the listener to the master set
-    FD_SET(sockfd, &master); 
+    FD_SET(listener_fd, &master);
 
 	// keep track of the biggest file descriptor
-	fdmax = sockfd;
-
-	FD_ZERO(&bitmap);
+	fdmax = listener_fd;
 
 	printf("server: waiting for connections...\n");
 
@@ -291,18 +301,74 @@ int main(void) {
 			exit(4);
 		}
 
+		// debug message
+		printf("read_fds:\n");
+		for (i = 0; i < 64; i ++) {
+			if (FD_ISSET(i, &read_fds)) {
+				printf("1 ");
+			} else {
+				printf("0 ");
+			}
+		}
+		printf("\n");
+		printf("master_fds:\n");
+		for (i = 0; i < 64; i ++) {
+			if (FD_ISSET(i, &master)) {
+				printf("1 ");
+			} else {
+				printf("0 ");
+			}
+		}
+		printf("\n");
+
 		// run through the existing connections looking for data to read
 		for (i = 0; i <= fdmax; i++) {
             if (FD_ISSET(i, &read_fds)) {
-                if (i == sockfd) {
-                	handle_new_connection(sockfd, &fdmax, &master, ci_list, &ci_size, &bitmap);
+                if (i == listener_fd) {
+                	// getting new incoming connection
+                	handle_new_connection(listener_fd, &fdmax, &master, clients, &client_num, &bitmap);
 				} else {
-				    handle_client_data(i, &master, ci_list, ci_size, cp_list, &bitmap);
-				} // end of handling data from client
-			} // end of getting new incoming connection
-		} // end of looping through file descriptors
+					// handling data from client
+					struct client_info * client;
+					for (j = 0; j < CLIENT_MAX; j++) {
+						if (FD_ISSET(j, &bitmap)) {
+							if (i == clients[j]->sockfd) {
+								client = clients[j];
+								break;
+							}
+						}
+					}
+					// if client not in session, server will allocate a partner first
+					if (!client->in_session) {
+						handle_client_data(i, &master, clients, client_num, &bitmap);
+						break;
+					}
 
-	} // end of while
+					// forwarding packet from client to partner
+					struct client_info * partner = clients[client->partner_index];
+					int nbytes = 0;
+					char buf[BUF_MAX];
+					if ((nbytes = recv(client->sockfd, buf, sizeof buf, 0)) <= 0) {
+						// got error or connection closed by client
+						if (nbytes == 0) {
+							// connection closed
+							printf("selectserver: socket %d hung up\n", client->sockfd);
+						} else {
+							perror("recv() client data fails");
+						}
+						close(client->sockfd); // bye!
+						FD_CLR(client->sockfd, &master); // remove from master set
+						break;
+					} else {
+						if (send(partner->sockfd, buf, nbytes, 0) == -1) {
+							perror("send");
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
 
 	return 0;
 }
