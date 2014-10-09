@@ -164,9 +164,10 @@ int send_ack(int sockfd, struct client_info * clients[], int *client_num, fd_set
 	node->name = buf;
 	node->sockfd = sockfd;
 	node->partner_index = -1;
+	node->state = CONNECTING;
 	clients[i] = node;
 
-	sprintf(ackbuf, "%s:%s", ACK, node->name);
+	sprintf(ackbuf, "%s:%s", MSG_ACK, node->name);
 	if (send(sockfd, ackbuf, strlen(ackbuf), 0) == -1) {
 		perror("ack fails");
 		return -1;
@@ -209,61 +210,81 @@ struct client_info* find_partner(int sockfd,
     return self;
 }
 
-struct client_info * handle_client_data(int sockfd, fd_set *master,
+struct client_info * handle_chat_request(int sockfd, fd_set *master,
 		struct client_info *clients [], int client_num,
 		fd_set *bitmap)
 {
-	int nbytes;
 	char buf[BUF_MAX]; // buffer for client data
 	struct client_info *client;
 	struct client_info *partner;
 
-	if ((nbytes = recv(sockfd, buf, sizeof buf, 0)) <= 0) {
-		// got error or connection closed by client
-		if (nbytes == 0) {
-			// connection closed
-			printf("selectserver: socket %d hung up\n", sockfd);
-		} else {
-			perror("recv() client data fails");
+	// find a random partner and connect with the client who send the quest
+	client = find_partner(sockfd, clients, client_num, bitmap);
+	if (client_num == 1) {
+		char msg[] =  "You are the only user in the system right now.";
+		if (send(client->sockfd, msg, sizeof msg, 0) == -1) {
+			perror("send fails");
 		}
-		close(sockfd); // bye!
-		FD_CLR(sockfd, master); // remove from master set
 		return NULL;
-	} else {
-		buf[nbytes] = '\0';
-		if (strcmp(buf, CHAT_REQUEST) == 0) {
-			// find a random partner and connect with the client who send the quest
-			client = find_partner(sockfd, clients, client_num, bitmap);
-			if (client->partner_index == -1) {
-				printf("%s want to chat but there is no other user right now.\n", client->name);
-				return NULL;
-			}
-			partner = clients[client->partner_index];
-			// send IN_SESSION command to both clients
-			memset(&buf, 0, nbytes);
-			sprintf(buf, "%s:%s", IN_SESSION, partner->name);
-			if (FD_ISSET(client->sockfd, master)) {
-				if (send(client->sockfd, buf, strlen(buf), 0) == -1) {
-					perror("send IN_SESSION fails");
-					return NULL;
-				}
-			}
-			client->in_session = TRUE;
-			memset(&buf, 0, nbytes);
-			sprintf(buf, "%s:%s", IN_SESSION, client->name);
-			if (FD_ISSET(partner->sockfd, master)) {
-				if (send(partner->sockfd, buf, strlen(buf), 0) == -1) {
-					perror("send IN_SESSION fails");
-					return NULL;
-				}
-			}
-			partner->in_session = TRUE;
-			return partner;
-		} else {
-			printf("expected %s but recv invalid control message: %s \n", CHAT_REQUEST, buf);
+	}
+	partner = clients[client->partner_index];
+	// send IN_SESSION message to both clients
+	memset(&buf, 0, BUF_MAX);
+	sprintf(buf, "%s:%s", MSG_IN_SESSION, partner->name);
+	if (FD_ISSET(client->sockfd, master)) {
+		if (send(client->sockfd, buf, strlen(buf), 0) == -1) {
+			perror("send IN_SESSION fails");
 			return NULL;
 		}
 	}
+	client->state = CHATTING;
+	memset(&buf, 0, BUF_MAX);
+	sprintf(buf, "%s:%s", MSG_IN_SESSION, client->name);
+	if (FD_ISSET(partner->sockfd, master)) {
+		if (send(partner->sockfd, buf, strlen(buf), 0) == -1) {
+			perror("send IN_SESSION fails");
+			return NULL;
+		}
+	}
+	partner->state = CHATTING;
+	return partner;
+}
+
+void handle_help(struct client_info *client) {
+    // to be implemented
+}
+
+void handle_exit(struct client_info * client,
+	struct client_info *partner, fd_set *bitmap) {
+	FD_CLR(client->partner_index, bitmap);
+	client->partner_index = -1;
+	if (!partner) {
+		partner->partner_index = -1;
+	}
+	free(client);
+}
+
+void handle_quit(struct client_info *client, struct client_info *partner) {
+	partner->partner_index = -1;
+	client->partner_index = -1;
+	char pMsg[] = "Your partner quit your current chat channel";
+	char cMsg[] = "You quit your current chat channel successfully";
+	if (send(partner->sockfd, pMsg, sizeof(pMsg), 0) == -1) {
+		perror("quit channel fails");
+	}
+	if (send(client->sockfd, cMsg, sizeof(cMsg), 0) == -1) {
+		perror("quit channel fails");
+	}
+}
+
+int forward_chat_message(struct client_info *partner, char *buf) {
+	// forwarding packet from client to partner
+	if (send(partner->sockfd, buf, sizeof(buf), 0) == -1) {
+		perror("forward_chat_message");
+		return -1;
+	}
+	printf("send '%s' to %s[socket %d]\n", buf, partner->name, partner->sockfd);
+	return 0;
 }
 
 int main(void) {
@@ -302,24 +323,24 @@ int main(void) {
 		}
 
 		// debug message
-		printf("read_fds:\n");
-		for (i = 0; i < 64; i ++) {
-			if (FD_ISSET(i, &read_fds)) {
-				printf("1 ");
-			} else {
-				printf("0 ");
-			}
-		}
-		printf("\n");
-		printf("master_fds:\n");
-		for (i = 0; i < 64; i ++) {
-			if (FD_ISSET(i, &master)) {
-				printf("1 ");
-			} else {
-				printf("0 ");
-			}
-		}
-		printf("\n");
+//		printf("read_fds:\n");
+//		for (i = 0; i < 64; i ++) {
+//			if (FD_ISSET(i, &read_fds)) {
+//				printf("1 ");
+//			} else {
+//				printf("0 ");
+//			}
+//		}
+//		printf("\n");
+//		printf("master_fds:\n");
+//		for (i = 0; i < 64; i ++) {
+//			if (FD_ISSET(i, &master)) {
+//				printf("1 ");
+//			} else {
+//				printf("0 ");
+//			}
+//		}
+//		printf("\n");
 
 		// run through the existing connections looking for data to read
 		for (i = 0; i <= fdmax; i++) {
@@ -338,32 +359,59 @@ int main(void) {
 							}
 						}
 					}
-					// if client not in session, server will allocate a partner first
-					if (!client->in_session) {
-						handle_client_data(i, &master, clients, client_num, &bitmap);
-						break;
-					}
 
-					// forwarding packet from client to partner
-					struct client_info * partner = clients[client->partner_index];
-					int nbytes = 0;
-					char buf[BUF_MAX];
-					if ((nbytes = recv(client->sockfd, buf, sizeof buf, 0)) <= 0) {
+					int nbytes;
+				    char buf[BUF_MAX]; // buffer for client data
+					if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) {
 						// got error or connection closed by client
 						if (nbytes == 0) {
 							// connection closed
-							printf("selectserver: socket %d hung up\n", client->sockfd);
+							printf("selectserver: socket %d hung up\n", i);
 						} else {
 							perror("recv() client data fails");
 						}
-						close(client->sockfd); // bye!
-						FD_CLR(client->sockfd, &master); // remove from master set
-						break;
+						close(i); // bye!
+						FD_CLR(i, &master); // remove from master set
+						continue;
 					} else {
-						if (send(partner->sockfd, buf, nbytes, 0) == -1) {
-							perror("send");
+						buf[nbytes] = '\0';
+						printf("receive '%s' from %s[socket %d]\n", buf, client->name, client->sockfd);
+						/* handle help first */
+						if (strcmp(buf, HELP) == 0) {
+							handle_help(client);
+							continue;
+						}
+
+						switch (client->state) {
+						case INIT:
+							break;
+						case CONNECTING:
+							if (strcmp(buf, EXIT) == 0) {
+								handle_exit(client, NULL, &bitmap);
+							} else if (strcmp(buf, MSG_CHAT_REQUEST) == 0) {
+								// if client request to chat, server will allocate a partner first
+								handle_chat_request(i, &master, clients, client_num, &bitmap);
+								break;
+							}
+							break;
+						case CHATTING:
+						{
+                            struct client_info *partner = clients[client->partner_index];
+                            if (strcmp(buf, EXIT) == 0) {
+                            	handle_exit(client, partner, &bitmap);
+                            } else if (strcmp(buf, QUIT) == 0) {
+								handle_quit(client, partner);
+                            } else {
+                            	forward_chat_message(partner, buf);
+                            }
 							break;
 						}
+						case TRANSFERING:
+							break;
+						default:
+							break;
+						}
+
 					}
 				}
 			}

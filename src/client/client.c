@@ -20,15 +20,11 @@
 #include "control_msg.h"
 
 #define PORT "3490" // the port client will be connecting to 
+state_t state = INIT;
+char *partner_name = NULL;
 
-// supported commands
-#define CONNECT "/connect"
-#define CHAT "/chat"
-#define TRANSFER "/transfer"
-#define FLAG "/flag"
-#define HELP "/help"
-#define QUIT "/quit"
-#define EXIT "/exit"
+//TODO: implement Ctrl+C signal handler function
+//TODO: chat is not working right now
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa) {
@@ -96,15 +92,16 @@ int handle_connect(char *hostname, char *port) {
     buf[numbytes] = '\0';
 
     token = strtok(buf, ":");
-	if (strcmp(token, ACK) != 0) {
-		printf("expected %s but recv invalid control message: %s \n", ACK, buf);
+	if (strcmp(token, MSG_ACK) != 0) {
+		printf("expected %s but recv invalid control message: %s \n", MSG_ACK, buf);
 		return -1;
 	}
 	token = strtok(NULL, ":");
 	if (token == NULL) {
 		return -1;
 	}
-	printf("Connect to server successfully. Your user name is %s. Type 'Chat' to start chatting\n", token);
+	state = CONNECTING;
+	printf("Connect to server successfully. Your user name is %s. Type '%s' to start chatting\n", token, CHAT);
 	return sockfd;
 
 }
@@ -129,7 +126,7 @@ int handle_chat(int sockfd) {
 		printf("Error: You need connect to server first.\n");
 		return -1;
 	}
-	if (send(sockfd, CHAT_REQUEST, strlen(CHAT_REQUEST), 0) == -1) {
+	if (send(sockfd, MSG_CHAT_REQUEST, strlen(MSG_CHAT_REQUEST), 0) == -1) {
         perror("send Chat request fails");
 		return -1;
 	}
@@ -141,12 +138,13 @@ int handle_chat(int sockfd) {
 	}
     buf[numbytes] ='\0';
     token = strtok(buf, ":");
-    if (strcmp(token, IN_SESSION) != 0) {
-    	printf("expected %s but recv invalid control message: %s \n", IN_SESSION, buf);
+    if (strcmp(token, MSG_IN_SESSION) != 0) {
+    	printf("expected %s but recv invalid control message: %s \n", MSG_IN_SESSION, buf);
     	return -1;
     }
     token = strtok(NULL, ":");
     printf("receive in_session with %s\n", token);
+    state = CHATTING;
 	return 0;
 }
 
@@ -190,13 +188,31 @@ void* receiver_thread(void* args) {
 		}
 		buf[numbytes] ='\0';
 		token = strtok(buf, ":");
-		if (strcmp(token, IN_SESSION) != 0) {
-			printf("expected %s but recv invalid control message: %s \n", IN_SESSION, buf);
+		if (strcmp(token, MSG_IN_SESSION) == 0) {
+			state = CHATTING;
+			token = strtok(NULL, ":");
+			partner_name = malloc(sizeof(token));
+			strncpy(partner_name, token, sizeof(token));
 			continue;
 		}
-		token = strtok(NULL, ":");
-		printf("receive in_session with %s\n", token);
+		if (partner_name != NULL) {
+			printf("<%s>: %s\n", partner_name, buf);
+		} else {
+			printf("<server>: %s\n", buf);
+		}
     }
+	return 0;
+}
+
+int handle_quit(int sockfd) {
+	if (sockfd == -1) {
+		printf("Error: You need connect to server first.\n");
+		return -1;
+	}
+	if (send(sockfd, QUIT, strlen(QUIT), 0) == -1) {
+		perror("send QUIT fails");
+		return -1;
+	}
 	return 0;
 }
 
@@ -235,7 +251,7 @@ int main(int argc, char *argv[])
 						count++;
 				}
 				if (count != 1) {
-					printf("Usage: connect [hostname]\n");
+					printf("Usage: %s [hostname]\n", CONNECT);
 					continue;
 				}
 				sockfd = handle_connect(token, PORT);
@@ -246,16 +262,27 @@ int main(int argc, char *argv[])
 			} else if (strcmp(token, EXIT) == 0) {
 				/* exit */
 				exit(1);
+			} else if (strcmp(token, QUIT) == 0) {
+				/* quit current channel */
+				handle_quit(sockfd);
 			} else if (strcmp(token, HELP) == 0) {
 				/* help */
 				print_help();
 				continue;
 			} else {
-				printf("%s: Command not found. Type 'help' for more information.\n", token);
+				printf("%s: Command not found. Type '%s' for more information.\n", token, HELP);
 				continue;
 			}
 		} else {
-			send_text(sockfd, input_copy);
+            if (state == CHATTING) {
+            	send_text(sockfd, input_copy);
+            } else {
+            	// TODO: strip whitespace
+            	if (strcmp(input_copy, "") == 0) {
+            		continue;
+            	}
+            	printf("Invalid command. Type '%s' for more information.\n", HELP);
+            }
 			continue;
 		}
 	}
