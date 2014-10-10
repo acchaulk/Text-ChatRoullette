@@ -18,10 +18,6 @@
 #include "client.h"
 #include "control_msg.h"
 
-#define PORT "3490"  // the port users will be connecting to
-
-#define CLIENT_MAX 10     // how many pending connections queue will hold
-#define CHANNEL_MAX 5     // how many channels will exist concurrently
 
 void sigchld_handler(int s) {
 	while(waitpid(-1, NULL, WNOHANG) > 0);
@@ -279,12 +275,28 @@ void handle_quit(struct client_info *client, struct client_info *partner) {
 
 int forward_chat_message(struct client_info *partner, char *buf) {
 	// forwarding packet from client to partner
-	if (send(partner->sockfd, buf, sizeof(buf), 0) == -1) {
+	if (send_all(partner->sockfd, buf, BUF_MAX) == -1) {
 		perror("forward_chat_message");
 		return -1;
 	}
 	printf("send '%s' to %s[socket %d]\n", buf, partner->name, partner->sockfd);
 	return 0;
+}
+
+/* Helper function */
+int send_all(int socket, void *buffer, size_t length)
+{
+    char *ptr = (char*) buffer;
+    while (length > 0)
+    {
+        int i = send(socket, ptr, length, 0);
+        if (i < 1) {
+        	return -1;
+        }
+        ptr += i;
+        length -= i;
+    }
+    return 0;
 }
 
 int main(void) {
@@ -362,7 +374,7 @@ int main(void) {
 
 					int nbytes;
 				    char buf[BUF_MAX]; // buffer for client data
-					if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) {
+					if ((nbytes = recv(i, buf, BUF_MAX - 1, 0)) <= 0) {
 						// got error or connection closed by client
 						if (nbytes == 0) {
 							// connection closed

@@ -18,8 +18,4 @@ struct client_info {
    state_t state;
 };
 
-
-
-#define BUF_MAX 256 // max size for client data
-
 #endif

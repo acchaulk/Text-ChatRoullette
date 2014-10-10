@@ -19,12 +19,15 @@
 #include "client.h"
 #include "control_msg.h"
 
-#define PORT "3490" // the port client will be connecting to 
-state_t state = INIT;
-char *partner_name = NULL;
+state_t g_state = INIT;
+int g_sockfd = 0;
+char *g_partner_name = NULL;
+char *g_client_name = NULL;
 
-//TODO: implement Ctrl+C signal handler function
+//TODO: implement Ctrl+C signal handler in both cliend and server
 //TODO: chat is not working right now
+//TODO: type a string more than 256 characters could be a issue
+//TODO: all capital letter become lower case on the other end
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa) {
@@ -34,18 +37,52 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+void* receiver_thread(void* args) {
+	int numbytes;
+	char *token;
+	int sockfd = *(int *)args;
+	while(1) {
+		char * buf = malloc(BUF_MAX);
+    	if ((numbytes = recv(sockfd, buf, BUF_MAX-1, 0)) == -1) {
+			perror("recv IN_SESSION fails");
+			exit(1);
+		}
+    	buf[numbytes] = '\0';
+
+    	if (g_state == CONNECTING) {
+			/* server returns [IN_SESSION:user_name] */
+			char *token[PARAMS_MAX];
+			char *str;
+			int count = 0;
+			while ((str = strsep(&buf, ":")) != NULL) {
+				token[count++] = strdup(str);
+			}
+
+			if (strcmp(token[0], MSG_IN_SESSION) == 0) {
+				g_state = CHATTING;
+				g_partner_name = strdup(token[1]);
+				printf("You are chatting with %s\n", g_partner_name);
+			}
+			continue;
+    	}
+    	/* skip empty message */
+    	if (strcmp(buf, "") != 0) {
+    		printf("\n<%s>: %s\n", g_partner_name, buf);
+    	}
+		free(buf);
+    }
+	return 0;
+}
+
 /* return sockfd if success, otherwise -1 */
 int handle_connect(char *hostname, char *port) {
     // TODO: use hostname instead of ip address
 	int sockfd, numbytes;
-	char buf[BUF_MAX];
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 	char s[INET6_ADDRSTRLEN];
 	fd_set fdset;
 	struct timeval tv;
-	char *token;
-
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
@@ -84,6 +121,7 @@ int handle_connect(char *hostname, char *port) {
 
     freeaddrinfo(servinfo); // all done with this structure
 
+    char * buf = malloc(BUF_MAX);
     if ((numbytes = recv(sockfd, buf, BUF_MAX-1, 0)) == -1) {
         perror("recv");
         exit(1);
@@ -91,17 +129,22 @@ int handle_connect(char *hostname, char *port) {
 
     buf[numbytes] = '\0';
 
-    token = strtok(buf, ":");
-	if (strcmp(token, MSG_ACK) != 0) {
+    /* server returns [ACK:user_name] */
+    char *token[PARAMS_MAX];
+    char *str;
+    int count = 0;
+    while ((token[count++] = strsep(&buf, ":")) != NULL);
+
+	if (strcmp(token[0], MSG_ACK) != 0) {
 		printf("expected %s but recv invalid control message: %s \n", MSG_ACK, buf);
+		free(buf);
 		return -1;
 	}
-	token = strtok(NULL, ":");
-	if (token == NULL) {
-		return -1;
-	}
-	state = CONNECTING;
-	printf("Connect to server successfully. Your user name is %s. Type '%s' to start chatting\n", token, CHAT);
+
+	g_client_name = strdup(token[1]);
+	g_state = CONNECTING;
+	printf("Connect to server successfully. Your user name is %s. Type '%s' to start chatting\n", g_client_name, CHAT);
+	free(buf);
 	return sockfd;
 
 }
@@ -130,21 +173,6 @@ int handle_chat(int sockfd) {
         perror("send Chat request fails");
 		return -1;
 	}
-
-	// wait server
-    if ((numbytes = recv(sockfd, buf, BUF_MAX-1, 0)) == -1) {
-		perror("recv IN_SESSION fails");
-		exit(1);
-	}
-    buf[numbytes] ='\0';
-    token = strtok(buf, ":");
-    if (strcmp(token, MSG_IN_SESSION) != 0) {
-    	printf("expected %s but recv invalid control message: %s \n", MSG_IN_SESSION, buf);
-    	return -1;
-    }
-    token = strtok(NULL, ":");
-    printf("receive in_session with %s\n", token);
-    state = CHATTING;
 	return 0;
 }
 
@@ -176,34 +204,6 @@ void sender_thread(void* args) {
 
 }
 
-void* receiver_thread(void* args) {
-	int numbytes;
-	char buf[BUF_MAX];
-	char *token;
-	int sockfd = *(int *)args;
-	while(1) {
-    	if ((numbytes = recv(sockfd, buf, BUF_MAX-1, 0)) == -1) {
-			perror("recv IN_SESSION fails");
-			exit(1);
-		}
-		buf[numbytes] ='\0';
-		token = strtok(buf, ":");
-		if (strcmp(token, MSG_IN_SESSION) == 0) {
-			state = CHATTING;
-			token = strtok(NULL, ":");
-			partner_name = malloc(sizeof(token));
-			strncpy(partner_name, token, sizeof(token));
-			continue;
-		}
-		if (partner_name != NULL) {
-			printf("<%s>: %s\n", partner_name, buf);
-		} else {
-			printf("<server>: %s\n", buf);
-		}
-    }
-	return 0;
-}
-
 int handle_quit(int sockfd) {
 	if (sockfd == -1) {
 		printf("Error: You need connect to server first.\n");
@@ -216,72 +216,154 @@ int handle_quit(int sockfd) {
 	return 0;
 }
 
-int main(int argc, char *argv[])
-{
-	char user_input[BUF_MAX], input_copy[BUF_MAX];
-	int i;
-	int connected = 0; /* 0 means unconnected, 1 means connected*/
-	int sockfd = -1;
+void parse_control_command(char * cmd) {
+	char *params[PARAMS_MAX];
 	char *token;
 	char delim[2] = " ";
 	int count = 0;
+	pthread_t sender, receiver;
+
+	while ((token = strsep(&cmd, delim)) != NULL) {
+		params[count] = strdup(token);
+		count++;
+	}
+
+	switch (g_state) {
+	case INIT:
+		if (strcmp(params[0], CONNECT) == 0) {
+			if (count != 2) {
+				printf("Usage: %s [hostname]\n", CONNECT);
+				return;
+			}
+			g_sockfd = handle_connect(params[1], PORT);
+			pthread_create(&receiver, NULL, &receiver_thread, (void *)&g_sockfd);
+		} else if (strcmp(params[0], CHAT) == 0) {
+            printf("Error: You need connect to server first.\n");
+		} else if (strcmp(params[0], TRANSFER) == 0) {
+			printf("Error: You are not in a chat session\n");
+		} else if (strcmp(params[0], QUIT) == 0) {
+            printf("Error: You are not in a chat session\n");
+		} else if (strcmp(params[0], EXIT) == 0) {
+			exit(1);
+		} else if (strcmp(params[0], HELP) == 0) {
+			print_help();
+		} else if (strcmp(params[0], FLAG) == 0) {
+            //to be implemented
+		} else {
+			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
+		}
+		break;
+	case CONNECTING:
+		if (strcmp(params[0], CONNECT) == 0) {
+			printf("Error: You are already connected to the server\n");
+		} else if (strcmp(params[0], CHAT) == 0) {
+			handle_chat(g_sockfd);
+		} else if (strcmp(params[0], TRANSFER) == 0) {
+			printf("Error: You are not in a chat session\n");
+		} else if (strcmp(params[0], QUIT) == 0) {
+			printf("Error: You are not in a chat session\n");
+		} else if (strcmp(params[0], EXIT) == 0) {
+			exit(1);
+		} else if (strcmp(params[0], HELP) == 0) {
+			print_help();
+		} else if (strcmp(params[0], FLAG) == 0) {
+			//to be implemented
+		} else {
+			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
+		}
+		break;
+	case CHATTING:
+		if (strcmp(params[0], CONNECT) == 0) {
+			printf("Error: You are already connected to the server\n");
+		} else if (strcmp(params[0], CHAT) == 0) {
+			printf("Error: You are in a chat session, type '%s' to quit current session\n", QUIT);
+		} else if (strcmp(params[0], TRANSFER) == 0) {
+			// to be implemented
+		} else if (strcmp(params[0], QUIT) == 0) {
+			handle_quit(g_sockfd);
+		} else if (strcmp(params[0], EXIT) == 0) {
+			exit(1);
+		} else if (strcmp(params[0], HELP) == 0) {
+			print_help();
+		} else if (strcmp(params[0], FLAG) == 0) {
+			//to be implemented
+		} else {
+			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
+		}
+		break;
+	case TRANSFERING:
+		if (strcmp(params[0], CONNECT) == 0) {
+			printf("Error: You are already connected to the server\n");
+		} else if (strcmp(params[0], CHAT) == 0) {
+			printf("Error: You are in a chat session, type '%s' to quit current session\n", QUIT);
+		} else if (strcmp(params[0], TRANSFER) == 0) {
+			// to be implemented
+		} else if (strcmp(params[0], QUIT) == 0) {
+			handle_quit(g_sockfd);
+		} else if (strcmp(params[0], EXIT) == 0) {
+			exit(1);
+		} else if (strcmp(params[0], HELP) == 0) {
+			print_help();
+		} else if (strcmp(params[0], FLAG) == 0) {
+			//to be implemented
+		} else {
+			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
+		}
+		break;
+	default:
+		printf("This line should never be printed out\n");
+		break;
+	}
+}
+
+// strip whitespace
+char *strip(char *s)
+{
+    size_t size;
+    char *end;
+    size = strlen(s);
+    if (!size) return s;
+    end = s + size - 1;
+    while (end >= s && isspace(*end)) {
+    	end--;
+    }
+    *(end + 1) = '\0';
+    while (*s && isspace(*s)) {
+    	s++;
+    }
+    return s;
+}
+
+int main(int argc, char *argv[])
+{
+	char user_input[BUF_MAX];
+	char * input_copy;
+	int i;
+	int connected = 0; /* 0 means unconnected, 1 means connected*/
     struct thread_info *tinfo;
-    pthread_t sender, receiver;
 
     print_ascii_art();
 
     while (1) {
-		printf("> "); // prompt
+		printf("%s> ", g_client_name == NULL ? "" : g_client_name); // prompt
 		fgets(user_input, BUF_MAX - 1, stdin);
 		user_input[strlen(user_input) - 1] = '\0';
 		for (i = 0; user_input[i] != '\0'; i++) {
 			user_input[i] = tolower(user_input[i]);
 		}
 
-		// parse user input
-		strcpy(input_copy, user_input);
+		input_copy = strdup(user_input); // copy user input
 		if (input_copy[0] == '/') {
-			// control command
-			token = strtok(input_copy, delim);
-			if (strcmp(token, CONNECT) == 0) {
-				/* connect */
-				while (token != NULL) {
-					token = strtok(NULL, delim);
-					if (token != NULL)
-						count++;
-				}
-				if (count != 1) {
-					printf("Usage: %s [hostname]\n", CONNECT);
-					continue;
-				}
-				sockfd = handle_connect(token, PORT);
-			    pthread_create(&receiver, NULL, &receiver_thread, (void *)&sockfd);
-			} else if (strcmp(token, CHAT) == 0) {
-				/* chat */
-				handle_chat(sockfd);
-			} else if (strcmp(token, EXIT) == 0) {
-				/* exit */
-				exit(1);
-			} else if (strcmp(token, QUIT) == 0) {
-				/* quit current channel */
-				handle_quit(sockfd);
-			} else if (strcmp(token, HELP) == 0) {
-				/* help */
-				print_help();
-				continue;
-			} else {
-				printf("%s: Command not found. Type '%s' for more information.\n", token, HELP);
+			parse_control_command(input_copy);
+			continue;
+		} else {
+			if (strcmp(strip(input_copy), "") == 0) {
 				continue;
 			}
-		} else {
-            if (state == CHATTING) {
-            	send_text(sockfd, input_copy);
+            if (g_state == CHATTING) {
+            	send_text(g_sockfd, input_copy);
             } else {
-            	// TODO: strip whitespace
-            	if (strcmp(input_copy, "") == 0) {
-            		continue;
-            	}
-            	printf("Invalid command. Type '%s' for more information.\n", HELP);
+            	printf("%s: Command not found. Type '%s' for more information.\n", input_copy, HELP);
             }
 			continue;
 		}
