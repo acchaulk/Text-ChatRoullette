@@ -1,11 +1,17 @@
 #ifndef __CONTROL_MSG_H__
 #define __CONTROL_MSG_H__
 
-#define MSG_ACK "Acknowledgment"
-#define MSG_CHAT_REQUEST "chat_request"
-#define MSG_IN_SESSION "in_session"
+#define MSG_ACK "##acknowledgment"
+#define MSG_CHAT_REQUEST "##chat_request"
+#define MSG_IN_SESSION "##in_session"
+#define MSG_QUIT "##partner_quit"
+#define MSG_ADMIN "##upgrade_to_admin"
+#define MSG_BE_KICKOUT "##be_kicked_out"
+#define MSG_PARTNER_BE_KICKOUT "##partner_be_kicked_out"
+#define MSG_BLOCK "##be_blocked"
+#define MSG_UNBLOCK "##be_unblocked"
 
-// supported commands
+// supported client commands
 #define CONNECT "/connect"
 #define CHAT "/chat"
 #define TRANSFER "/transfer"
@@ -14,13 +20,12 @@
 #define QUIT "/quit"
 #define EXIT "/exit"
 
-#define TRUE 1
-#define FALSE 0
-
-#define PORT "3490" // the port client will be connecting to
-#define BUF_MAX 256 // max size for client data
-#define CLIENT_MAX 10     // how many pending connections queue will hold
-#define CHANNEL_MAX 5     // how many channels will exist concurrently
-#define PARAMS_MAX 10 // maximum number of parameter
+// supported admin command
+#define STATS "/stats"
+#define THROWOUT "/throwout"
+#define BLOCK "/block"
+#define UNBLOCK "/unblock"
+#define START "/start"
+#define END "/end"
 
 #endif

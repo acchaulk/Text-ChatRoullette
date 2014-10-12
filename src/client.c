@@ -16,10 +16,10 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 
-#include "client.h"
+#include "common.h"
 #include "control_msg.h"
 
-state_t g_state = INIT;
+client_state_t g_state = INIT;
 int g_sockfd = 0;
 char *g_partner_name = NULL;
 char *g_client_name = NULL;
@@ -27,7 +27,8 @@ char *g_client_name = NULL;
 //TODO: implement Ctrl+C signal handler in both cliend and server
 //TODO: chat is not working right now
 //TODO: type a string more than 256 characters could be a issue
-//TODO: all capital letter become lower case on the other end
+//TODO: all capital letter become lower case on the other end (done)
+//TODO: implement help on server side
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa) {
@@ -39,8 +40,11 @@ void *get_in_addr(struct sockaddr *sa) {
 
 void* receiver_thread(void* args) {
 	int numbytes;
-	char *token;
+	char *token[PARAMS_MAX];
+	char *str;
 	int sockfd = *(int *)args;
+	int is_control_msg = 1; /* flag */
+
 	while(1) {
 		char * buf = malloc(BUF_MAX);
     	if ((numbytes = recv(sockfd, buf, BUF_MAX-1, 0)) == -1) {
@@ -49,27 +53,58 @@ void* receiver_thread(void* args) {
 		}
     	buf[numbytes] = '\0';
 
-    	if (g_state == CONNECTING) {
-			/* server returns [IN_SESSION:user_name] */
-			char *token[PARAMS_MAX];
-			char *str;
-			int count = 0;
-			while ((str = strsep(&buf, ":")) != NULL) {
-				token[count++] = strdup(str);
-			}
-
+		int count = 0;
+		while ((str = strsep(&buf, ":")) != NULL) {
+			token[count++] = strdup(str);
+		}
+    	switch (g_state) {
+    	case CONNECTING:
 			if (strcmp(token[0], MSG_IN_SESSION) == 0) {
+				/* server returns [IN_SESSION:user_name] */
 				g_state = CHATTING;
 				g_partner_name = strdup(token[1]);
 				printf("You are chatting with %s\n", g_partner_name);
+			} else if (strcmp(token[0], MSG_BLOCK) == 0) {
+				printf("You are banned to start a new chat by admin");
+			} else if (strcmp(token[0], MSG_UNBLOCK) == 0) {
+				printf("Your name is removed from block list");
+			} else {
+				is_control_msg = 0;
 			}
-			continue;
+			break;
+    	case CHATTING:
+    		if (strcmp(token[0], MSG_QUIT) == 0) {
+    			g_state = CONNECTING;
+    			printf("You quit your current chat channel\n");
+    		} else if (strcmp(token[0], MSG_BE_KICKOUT) == 0) {
+    			g_state = CONNECTING;
+    			printf("You are kicked out from current channel by admin\n");
+    		} else if (strcmp(token[0], MSG_PARTNER_BE_KICKOUT) == 0) {
+    			g_state = CONNECTING;
+    			printf("Your partner be kicked out from current channel by admin\n");
+    		} else if (strcmp(token[0], MSG_BLOCK) == 0) {
+    			g_state = CONNECTING;
+    			printf("You are banned to start a new chat by admin");
+    		} else {
+    			is_control_msg = 0;
+    		}
+    		break;
+    	case TRANSFERING:
+    		// TODO: implement control msg for TRANSFERING state
+    		is_control_msg = 0;
+    		break;
+    	default:
+    		break;
     	}
+
     	/* skip empty message */
-    	if (strcmp(buf, "") != 0) {
-    		printf("\n<%s>: %s\n", g_partner_name, buf);
-    	}
-		free(buf);
+		if (!is_control_msg && strcmp(token[0], "") != 0) {
+			printf("\n<%s>: %s\n", g_partner_name, token[0]);
+		}
+		int i;
+		for (i = 0; i < count; i++) {
+			free(token[i]);
+		}
     }
 	return 0;
 }
@@ -112,7 +147,7 @@ int handle_connect(char *hostname, char *port) {
 
     if (p == NULL) {
         fprintf(stderr, "client: failed to connect\n");
-        return -1;
+        exit(1);
     }
 
     inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
@@ -142,21 +177,12 @@ int handle_connect(char *hostname, char *port) {
 	}
 
 	g_client_name = strdup(token[1]);
+	printf("Connect to server successfully. Your user name is %s. Type '%s' to start chatting\n",
+			g_client_name, CHAT);
 	g_state = CONNECTING;
-	printf("Connect to server successfully. Your user name is %s. Type '%s' to start chatting\n", g_client_name, CHAT);
 	free(buf);
 	return sockfd;
 
-}
-
-void print_ascii_art() {
-    printf("\n");
-    printf("Welcome to Chat Roullette v1.0\n");
-    printf("\n");
-    printf("╔═╗┬ ┬┌─┐┌┬┐  ╦═╗┌─┐┬ ┬┬  ┬  ┌─┐┌┬┐┌┬┐┌─┐\n");
-    printf("║  ├─┤├─┤ │   ╠╦╝│ ││ ││  │  ├┤  │  │ ├┤ \n");
-    printf("╚═╝┴ ┴┴ ┴ ┴   ╩╚═└─┘└─┘┴─┘┴─┘└─┘ ┴  ┴ └─┘\n");
-    printf("\n");
 }
 
 /* return 0 for success, otherwise -1 */
@@ -198,12 +224,6 @@ void print_help() {
 	printf("%-10s - quit client.\n", EXIT);
 }
 
-void sender_thread(void* args) {
-
-
-
-}
-
 int handle_quit(int sockfd) {
 	if (sockfd == -1) {
 		printf("Error: You need connect to server first.\n");
@@ -238,17 +258,17 @@ void parse_control_command(char * cmd) {
 			g_sockfd = handle_connect(params[1], PORT);
 			pthread_create(&receiver, NULL, &receiver_thread, (void *)&g_sockfd);
 		} else if (strcmp(params[0], CHAT) == 0) {
-            printf("Error: You need connect to server first.\n");
+			printf("Error: You need connect to server first.\n");
 		} else if (strcmp(params[0], TRANSFER) == 0) {
 			printf("Error: You are not in a chat session\n");
 		} else if (strcmp(params[0], QUIT) == 0) {
-            printf("Error: You are not in a chat session\n");
+			printf("Error: You are not in a chat session\n");
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
 			print_help();
 		} else if (strcmp(params[0], FLAG) == 0) {
-            //to be implemented
+			//to be implemented
 		} else {
 			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
 		}
@@ -314,24 +334,7 @@ void parse_control_command(char * cmd) {
 		printf("This line should never be printed out\n");
 		break;
 	}
-}
 
-// strip whitespace
-char *strip(char *s)
-{
-    size_t size;
-    char *end;
-    size = strlen(s);
-    if (!size) return s;
-    end = s + size - 1;
-    while (end >= s && isspace(*end)) {
-    	end--;
-    }
-    *(end + 1) = '\0';
-    while (*s && isspace(*s)) {
-    	s++;
-    }
-    return s;
 }
 
 int main(int argc, char *argv[])
@@ -348,9 +351,9 @@ int main(int argc, char *argv[])
 		printf("%s> ", g_client_name == NULL ? "" : g_client_name); // prompt
 		fgets(user_input, BUF_MAX - 1, stdin);
 		user_input[strlen(user_input) - 1] = '\0';
-		for (i = 0; user_input[i] != '\0'; i++) {
-			user_input[i] = tolower(user_input[i]);
-		}
+//		for (i = 0; user_input[i] != '\0'; i++) {
+//			user_input[i] = tolower(user_input[i]);
+//		}
 
 		input_copy = strdup(user_input); // copy user input
 		if (input_copy[0] == '/') {
@@ -368,10 +371,6 @@ int main(int argc, char *argv[])
 			continue;
 		}
 	}
-
-
-
-
 
     return 0;
 }
