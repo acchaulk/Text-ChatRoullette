@@ -13,7 +13,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-
+#include <libgen.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 
@@ -322,7 +322,8 @@ int send_file(const char * input_file) {
 		return 1;
 	}
 	char buf[BUF_MAX];
-	sprintf(buf, "%s:%s", MSG_SENDING_FILE, input_file);
+	char * file_name= strdup(input_file);
+	sprintf(buf, "%s:%s", MSG_SENDING_FILE, basename(file_name));
 	if(send(g_sockfd, buf, strlen(buf), 0) == -1) {
 		printf("Could not send the file.\n");
 	}
