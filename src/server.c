@@ -310,14 +310,19 @@ struct client_info * handle_chat_request(int sockfd, fd_set *master,
 
 void handle_transfer(const char * file_name, struct client_info *client, struct client_info *partner) {
 
-	client->state = TRANSFERING;
-	partner->state = TRANSFERING;
-
 	char buf[BUF_MAX];
 	sprintf(buf, "%s:%s", MSG_RECEIVING_FILE, file_name);
 	if (send(partner->sockfd, buf, sizeof(buf), 0) == -1) {
-		perror("Receiving file fails");
+		perror("send receiving file fails");
+		return;
 	}
+
+	if (send(client->sockfd, MSG_TRANSFER_ACK, sizeof(MSG_TRANSFER_ACK), 0) == -1) {
+		perror("send reponse ack fails");
+		return;
+	}
+	client->state = TRANSFERING;
+	partner->state = TRANSFERING;
 }
 
 void handle_help(struct client_info *client) {
@@ -524,7 +529,7 @@ void handle_grace_period() {
 	printf("Server will be shutdown in %d seconds!\n", GRACE_PERIOD_SECONDS);
 }
 
-int forward_chat_message(struct client_info *partner, char *buf) {
+int forward_message(struct client_info *partner, char *buf) {
 	// forwarding packet from client to partner
 	if (send_all_packets(partner->sockfd, buf, BUF_MAX) == -1) {
 		perror("forward_chat_message");
@@ -600,20 +605,9 @@ int send_file(int sockfd, const char * input_file) {
 	return 0;
 }
 
-void handle_transfer_complete(struct client_info * client, struct client_info * partner) {
-
+void handle_transfer_complete(struct client_info *client, struct client_info *partner) {
 	partner->state = CHATTING;
 	client->state = CHATTING;
-
-	if (send(partner->sockfd, MSG_TRANSFER_COMPLETE, strlen(MSG_TRANSFER_COMPLETE), 0) == -1) {
-		perror("Send transfer complete fails");
-	}
-
-	if (send(client->sockfd, MSG_TRANSFER_COMPLETE, strlen(MSG_TRANSFER_COMPLETE), 0) == -1) {
-		perror("Send transfer complete fails");
-	}
-
-
 }
 
 void kill_thread(int signum) {
@@ -682,8 +676,8 @@ void * main_loop(void * arg) {
 					}
 
 					int nbytes;
-				    char *buf = malloc(BUF_MAX); // buffer for client data
-					if ((nbytes = recv(i, buf, BUF_MAX - 1, 0)) <= 0) {
+				    char *buf = malloc(BUF_MAX + 1); // buffer for client data
+					if ((nbytes = recv(i, buf, BUF_MAX, 0)) <= 0) {
 						// got error or connection closed by client
 						if (nbytes == 0) {
 							// connection closed
@@ -695,7 +689,7 @@ void * main_loop(void * arg) {
 						FD_CLR(i, &master); // remove from g_master set
 						continue;
 					} else {
-						buf[nbytes] = '\0';
+						buf[nbytes + 1] = '\0';
 						printf("receive '%s' from %s[socket %d]\n", buf, client->name, client->sockfd);
 
 						char *token;
@@ -733,25 +727,19 @@ void * main_loop(void * arg) {
                             } else if (strcmp(params[0], QUIT) == 0) {
 								handle_quit(client, partner);
                             } else if (strcmp(params[0], MSG_SENDING_FILE) == 0) {
-                            	if(count != 2) {
-                            		printf("Invalid control message.\n");
-                            	}
                             	handle_transfer(params[1], client, partner);
-
-
                             } else {
-                            	forward_chat_message(partner, params[0]);
+                            	forward_message(partner, params[0]);
                             }
 							break;
 						}
 						case TRANSFERING:
 						{
 							struct client_info *partner = g_clients[client->partner_index];
-
-							if(strcmp(params[0], MSG_TRANSFER_COMPLETE) == 0) {
+							if (strcmp(params[0], MSG_RECEIVE_SUCCESS) == 0) {
 								handle_transfer_complete(client, partner);
 							} else {
-								forward_chat_message(partner, params[0]);
+								forward_message(partner, params[0]);
 							}
 							break;
 						}
@@ -874,7 +862,7 @@ int main(void) {
 
 	while (1) {
 		printf("admin> "); // prompt
-		fgets(user_input, BUF_MAX - 1, stdin);
+		fgets(user_input, BUF_MAX, stdin);
 		user_input[strlen(user_input) - 1] = '\0';
 
 		char * input_copy = strdup(user_input); // copy user input
