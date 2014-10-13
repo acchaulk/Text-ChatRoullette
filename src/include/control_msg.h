@@ -10,6 +10,8 @@
 #define MSG_PARTNER_BE_KICKOUT "##partner_be_kicked_out"
 #define MSG_BLOCK "##be_blocked"
 #define MSG_UNBLOCK "##be_unblocked"
+#define MSG_GRACE_PERIOD "##grace_period"
+#define MSG_SERVER_STOP "##server_stop"
 
 // supported client commands
 #define CONNECT "/connect"

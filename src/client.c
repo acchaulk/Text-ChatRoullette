@@ -44,6 +44,7 @@ void* receiver_thread(void* args) {
 	char *str;
 	int sockfd = *(int *)args;
 	int is_control_msg = 1; /* flag */
+	int end = 0;
 
 	while(1) {
 		char * buf = malloc(BUF_MAX);
@@ -68,6 +69,14 @@ void* receiver_thread(void* args) {
 				printf("You are banned to start a new chat by admin");
 			} else if (strcmp(token[0], MSG_UNBLOCK) == 0) {
 				printf("Your name is removed from block list");
+			} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
+				printf("Server will be shutdown in 10 seconds!\n");
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+				close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				end = 1; // stop receiver thread
+				printf("Server shutdown!\n");
 			} else {
 				is_control_msg = 0;
 			}
@@ -85,7 +94,15 @@ void* receiver_thread(void* args) {
     		} else if (strcmp(token[0], MSG_BLOCK) == 0) {
     			g_state = CONNECTING;
     			printf("You are banned to start a new chat by admin");
-    		} else {
+    		} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
+				printf("Server will be shutdown in 10 seconds!\n");
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+				close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				end = 1; // stop receiver thread
+				printf("Server shutdown\n");
+			} else {
     			is_control_msg = 0;
     		}
     		break;
@@ -104,6 +121,9 @@ void* receiver_thread(void* args) {
 		int i;
 		for (i = 0; i < count; i++) {
 			free(token[i]);
+		}
+		if (end) {
+			break;
 		}
     }
 	return 0;

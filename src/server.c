@@ -13,6 +13,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <signal.h>
 
 #include "common.h"
@@ -23,7 +24,9 @@
 server_state_t g_state =  SERVER_INIT;
 struct client_info* g_clients[CLIENT_MAX]; // chat queue
 fd_set g_bitmap;  // bitmap for chat channel
+fd_set g_master;  // global socket map
 long g_useid = 0;  // global user id
+pthread_t g_connector;
 
 void sigchld_handler(int s) {
 	while(waitpid(-1, NULL, WNOHANG) > 0);
@@ -107,38 +110,8 @@ void cleanup() {
 	}
 }
 
-/* return 0 if connection sets up, otherwise return -1 */
-int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
-		struct client_info *clients [], fd_set *bitmap) {
-    int new_fd;
-	socklen_t addrlen;
-	struct sockaddr_storage their_addr; // connector's address information
-	char remoteIP[INET6_ADDRSTRLEN];
-	
-	addrlen = sizeof their_addr;
-	new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-					&addrlen);
-	if (new_fd == -1) {
-		perror("accept() fails");
-		return -1;
-	} else {
-		FD_SET(new_fd, master); // add to master set
-		if (new_fd > *fdmax) {
-			*fdmax = new_fd; // keep track of the max
-		}
-		inet_ntop(their_addr.ss_family,
-				get_in_addr((struct sockaddr *)&their_addr),
-				remoteIP, sizeof remoteIP);
-		printf("selectserver: new connection from %s on "
-			   "socket %d\n", remoteIP, new_fd);
-		
-		// Acks client and increment current index
-		return send_ack(new_fd, clients, bitmap);
-	}
-}
-
 /* Generate a new client node */
-int get_new_client(int sockfd, struct client_info **node) {
+int create_client(int sockfd, struct client_info **node) {
 	char *name;
 	int index;
 
@@ -174,6 +147,13 @@ int get_new_client(int sockfd, struct client_info **node) {
 	return index;
 }
 
+void destroy_client(struct client_info ** client) {
+	free((*client)->name);
+	(*client)->name = NULL;
+	free(*client);
+	*client = NULL;
+}
+
 // add client to chat queue, then ack back
 // TODO: synchronization
 int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
@@ -181,7 +161,7 @@ int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
 	struct client_info *client;
 
 	/* add new client to chat queue */
-	int index = get_new_client(sockfd, &client);
+	int index = create_client(sockfd, &client);
 	if (index == -1) {
 		return -1;
 	}
@@ -259,6 +239,36 @@ struct client_info* find_partner(int sockfd,
 	clients[index]->partner_index = himself;
 
     return self;
+}
+
+/* return 0 if connection sets up, otherwise return -1 */
+int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
+		struct client_info *clients [], fd_set *bitmap) {
+    int new_fd;
+	socklen_t addrlen;
+	struct sockaddr_storage their_addr; // connector's address information
+	char remoteIP[INET6_ADDRSTRLEN];
+
+	addrlen = sizeof their_addr;
+	new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
+					&addrlen);
+	if (new_fd == -1) {
+		perror("accept() fails");
+		return -1;
+	} else {
+		FD_SET(new_fd, master); // add to g_master set
+		if (new_fd > *fdmax) {
+			*fdmax = new_fd; // keep track of the max
+		}
+		inet_ntop(their_addr.ss_family,
+				get_in_addr((struct sockaddr *)&their_addr),
+				remoteIP, sizeof remoteIP);
+		printf("selectserver: new connection from %s on "
+			   "socket %d\n", remoteIP, new_fd);
+
+		// Acks client and increment current index
+		return send_ack(new_fd, clients, bitmap);
+	}
 }
 
 struct client_info * handle_chat_request(int sockfd, fd_set *master,
@@ -448,6 +458,58 @@ void handle_unblock(char *username) {
 	printf("'%s' is not found in chat queue\n", username);
 }
 
+void handle_end(int signum)
+{
+	int i;
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_bitmap)) {
+			struct client_info * client = g_clients[i];
+			if (send(client->sockfd, MSG_SERVER_STOP, strlen(MSG_SERVER_STOP), 0) == -1) {
+				perror("send end timer fails");
+			}
+			close(client->sockfd); // close socket();
+			destroy_client(&client);
+
+		}
+	}
+	FD_ZERO(&g_bitmap);
+	pthread_kill(g_connector, SIGUSR1); // send a user define signal to kill thread
+	g_state = SERVER_INIT;
+	printf("Shutdown server successfully\n");
+}
+
+void handle_grace_period() {
+	int i;
+	char msg[] = "Server will be shutdown in 10 seconds!";
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_bitmap)) {
+			struct client_info * client = g_clients[i];
+			if (send(client->sockfd, MSG_GRACE_PERIOD, strlen(MSG_GRACE_PERIOD), 0) == -1) {
+				perror("send grace period timer fails");
+			}
+		}
+	}
+
+	struct itimerval timer;
+	struct sigaction sa;
+	/* Install timer_handler as the signal handler for SIGVTALRM. */
+	memset (&sa, 0, sizeof (sa));
+	sa.sa_handler = &handle_end;
+	sigaction (SIGALRM, &sa, NULL);
+
+	/* Configure the timer to expire after 10 second... */
+	timer.it_value.tv_sec = GRACE_PERIOD_SECONDS;
+	timer.it_value.tv_usec = 0;
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = 0;
+	if (setitimer(ITIMER_REAL, &timer, NULL) < 0) {
+		perror("set grace period timer fails");
+		return;
+	}
+	g_state = GRACE_PERIOD;
+	printf("Server will be shutdown in %d seconds!\n", GRACE_PERIOD_SECONDS);
+}
+
 int forward_chat_message(struct client_info *partner, char *buf) {
 	// forwarding packet from client to partner
 	if (send_all(partner->sockfd, buf, BUF_MAX) == -1) {
@@ -474,6 +536,17 @@ int send_all(int socket, void *buffer, size_t length)
     return 0;
 }
 
+void kill_thread(int signum) {
+	int i;
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_master)) {
+			close(i);
+		}
+	}
+	FD_ZERO(&g_master);
+	pthread_exit();
+}
+
 void * main_loop(void * arg) {
     int listener_fd;
 	int fdmax;
@@ -491,11 +564,17 @@ void * main_loop(void * arg) {
 
 	g_state = SERVER_RUNNING;
 
-    // add the listener to the master set
+    // add the listener to the g_master set
     FD_SET(listener_fd, &master);
 
 	// keep track of the biggest file descriptor
 	fdmax = listener_fd;
+
+	struct sigaction sa;
+	/* Install timer_handler as the signal handler for SIGVTALRM. */
+	memset (&sa, 0, sizeof (sa));
+	sa.sa_handler = &kill_thread;
+	sigaction (SIGUSR1, &sa, NULL);
 
 	while(1) {  
 	    read_fds = master; // copy it
@@ -533,7 +612,7 @@ void * main_loop(void * arg) {
 							perror("recv() client data fails");
 						}
 						close(i); // bye!
-						FD_CLR(i, &master); // remove from master set
+						FD_CLR(i, &master); // remove from g_master set
 						continue;
 					} else {
 						buf[nbytes] = '\0';
@@ -596,13 +675,11 @@ void print_help() {
 	printf("%-10s - print help information.\n", HELP);
 }
 
-
 void parse_control_command(char * cmd) {
 	char *params[PARAMS_MAX];
 	char *token;
 	char delim[2] = " ";
 	int count = 0;
-	pthread_t connector;
 
 	while ((token = strsep(&cmd, delim)) != NULL) {
 		params[count] = strdup(token);
@@ -617,11 +694,10 @@ void parse_control_command(char * cmd) {
 			strcmp(params[0], UNBLOCK) == 0) {
 			printf("You need start server first\n");
 		} else if (strcmp(params[0], START) == 0) {
-			pthread_create(&connector, NULL, &main_loop, NULL);
+			pthread_create(&g_connector, NULL, &main_loop, NULL);
 		} else if (strcmp(params[0], END) == 0) {
 			/* server has not started yet, don't need grace period */
-			printf("Shutdown server successfully\n");
-			exit(1);
+			printf("Server hasn't started yet\n");
 		} else if (strcmp(params[0], HELP) == 0) {
 			print_help();
 		} else {
@@ -654,7 +730,7 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], START) == 0) {
 			printf("Server has already started.\n");
 		} else if (strcmp(params[0], END) == 0) {
-			//to be implemented
+			handle_grace_period();
 		} else if (strcmp(params[0], HELP) == 0) {
 			print_help();
 		} else {
