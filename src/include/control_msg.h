@@ -10,6 +10,8 @@
 #define MSG_PARTNER_BE_KICKOUT "##partner_be_kicked_out"
 #define MSG_BLOCK "##be_blocked"
 #define MSG_UNBLOCK "##be_unblocked"
+#define MSG_SENDING_FILE "##sending_file"
+#define MSG_RECEIVING_FILE "##receiving_file"
 
 // supported client commands
 #define CONNECT "/connect"

@@ -474,6 +474,85 @@ int send_all(int socket, void *buffer, size_t length)
     return 0;
 }
 
+/* sends the file the sockfd, input file */
+int send_file(int sockfd) {
+
+	/* check file size */
+	struct stat st;
+	stat(input_file, &st);
+	int size = st.st_size; // size in bytes
+
+	if (size > 10000000) {
+		printf("Size of file > 100 MB. Must send a smaller file.");
+		return -1;
+	}
+
+	/* Open the file that we wish to transfer */
+	FILE *fp = fopen(input_file, "rb");
+	if (fp == NULL) {
+		printf("File open error");
+		return 1;
+	}
+
+	/* Read data from file and send it */
+	while (1) {
+		/* First read file in chunks of 256 bytes */
+		unsigned char buff[256] = { 0 };
+		int nread = fread(buff, 1, 256, fp);
+		printf("Bytes read %d \n", nread);
+
+		/* If read was success, send data. */
+		if (nread > 0) {
+			printf("Sending \n");
+			write(g_sockfd, buff, nread);
+		}
+
+		/*
+		 * There is something tricky going on with read ..
+		 * Either there was error, or we reached end of file.
+		 */
+		if (nread < 256) {
+			if (feof(fp))
+				printf("End of file\n");
+			if (ferror(fp))
+				printf("Error reading\n");
+			break;
+		}
+
+	}
+
+	return 0;
+}
+
+//TODO save file in the current directory
+int recieve_file(const char * input_file) {
+
+	int bytesReceived = 0;
+	char recvBuff[256];
+
+	/* Create file where data will be stored */
+	FILE *fp;
+	fp = fopen(input_file, "ab");
+	if (NULL == fp) {
+		printf("Error opening file");
+		return -1;
+	}
+
+	/* Receive data in chunks of 256 bytes */
+	while ((bytesReceived = read(g_sockfd, recvBuff, 256)) > 0) {
+		printf("Bytes received %d\n", bytesReceived);
+		// recvBuff[n] = 0;
+		fwrite(recvBuff, 1, bytesReceived, fp);
+		// printf("%s \n", recvBuff);
+	}
+
+	if (bytesReceived < 0) {
+		printf("\n Read Error \n");
+	}
+
+	return 0;
+}
+
 void * main_loop(void * arg) {
     int listener_fd;
 	int fdmax;
@@ -569,6 +648,13 @@ void * main_loop(void * arg) {
 							break;
 						}
 						case TRANSFERING:
+							struct client_info *partner = g_clients[client->partner_index];
+							// receive file
+							recieve_file();
+
+							// send file to partner
+							send_file(partner->sockfd);
+
 							break;
 						default:
 							break;

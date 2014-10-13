@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -85,6 +86,8 @@ void* receiver_thread(void* args) {
     		} else if (strcmp(token[0], MSG_BLOCK) == 0) {
     			g_state = CONNECTING;
     			printf("You are banned to start a new chat by admin");
+    		} else if(strcmp(token[0], MSG_RECEIVING_FILE) == 0) {
+    			g_state = TRANSFERING;
     		} else {
     			is_control_msg = 0;
     		}
@@ -236,6 +239,85 @@ int handle_quit(int sockfd) {
 	return 0;
 }
 
+//TODO save file in the current directory
+int recieve_file(const char * input_file) {
+
+	int bytesReceived = 0;
+	char recvBuff[256];
+
+	/* Create file where data will be stored */
+	FILE *fp;
+	fp = fopen(input_file, "ab");
+	if (NULL == fp) {
+		printf("Error opening file");
+		return -1;
+	}
+
+	/* Receive data in chunks of 256 bytes */
+	while ((bytesReceived = read(g_sockfd, recvBuff, 256)) > 0) {
+		printf("Bytes received %d\n", bytesReceived);
+		// recvBuff[n] = 0;
+		fwrite(recvBuff, 1, bytesReceived, fp);
+		// printf("%s \n", recvBuff);
+	}
+
+	if (bytesReceived < 0) {
+		printf("\n Read Error \n");
+	}
+
+	return 0;
+}
+
+/* sends the file given the path name */
+int send_file(const char * input_file) {
+
+	/* check file size */
+	struct stat st;
+	stat(input_file, &st);
+	int size = st.st_size; // size in bytes
+
+	if (size > 10000000) {
+		printf("Size of file > 100 MB. Must send a smaller file.");
+		return -1;
+	}
+
+	/* Open the file that we wish to transfer */
+	FILE *fp = fopen(input_file, "rb");
+	if (fp == NULL) {
+		printf("File open error");
+		return 1;
+	}
+
+	/* Read data from file and send it */
+	while (1) {
+		/* First read file in chunks of 256 bytes */
+		unsigned char buff[256] = { 0 };
+		int nread = fread(buff, 1, 256, fp);
+		printf("Bytes read %d \n", nread);
+
+		/* If read was success, send data. */
+		if (nread > 0) {
+			printf("Sending \n");
+			write(g_sockfd, buff, nread);
+		}
+
+		/*
+		 * There is something tricky going on with read ..
+		 * Either there was error, or we reached end of file.
+		 */
+		if (nread < 256) {
+			if (feof(fp))
+				printf("End of file\n");
+			if (ferror(fp))
+				printf("Error reading\n");
+			break;
+		}
+
+	}
+
+	return 0;
+}
+
 void parse_control_command(char * cmd) {
 	char *params[PARAMS_MAX];
 	char *token;
@@ -298,7 +380,12 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], CHAT) == 0) {
 			printf("Error: You are in a chat session, type '%s' to quit current session\n", QUIT);
 		} else if (strcmp(params[0], TRANSFER) == 0) {
-			// to be implemented
+			if (count != 2) {
+				printf("Usage: %s /this/is/a/file \n", TRANSFER);
+				return;
+			} if(send_file(params[1]) == 0) {
+				printf("Sent file %s successfully! \n", params[1]);
+			}
 		} else if (strcmp(params[0], QUIT) == 0) {
 			handle_quit(g_sockfd);
 		} else if (strcmp(params[0], EXIT) == 0) {
