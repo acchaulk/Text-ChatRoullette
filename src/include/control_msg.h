@@ -12,6 +12,9 @@
 #define MSG_UNBLOCK "##be_unblocked"
 #define MSG_SENDING_FILE "##sending_file"
 #define MSG_RECEIVING_FILE "##receiving_file"
+#define MSG_TRANSFER_COMPLETE "##transfer_complete"
+#define MSG_GRACE_PERIOD "##grace_period"
+#define MSG_SERVER_STOP "##server_stop"
 
 // supported client commands
 #define CONNECT "/connect"

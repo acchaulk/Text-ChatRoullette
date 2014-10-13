@@ -24,6 +24,8 @@ client_state_t g_state = INIT;
 int g_sockfd = 0;
 char *g_partner_name = NULL;
 char *g_client_name = NULL;
+int g_fileOpened = 0;
+FILE *g_FP;
 
 //TODO: implement Ctrl+C signal handler in both cliend and server
 //TODO: chat is not working right now
@@ -45,6 +47,7 @@ void* receiver_thread(void* args) {
 	char *str;
 	int sockfd = *(int *)args;
 	int is_control_msg = 1; /* flag */
+	int end = 0;
 
 	while(1) {
 		char * buf = malloc(BUF_MAX);
@@ -69,6 +72,14 @@ void* receiver_thread(void* args) {
 				printf("You are banned to start a new chat by admin");
 			} else if (strcmp(token[0], MSG_UNBLOCK) == 0) {
 				printf("Your name is removed from block list");
+			} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
+				printf("Server will be shutdown in 10 seconds!\n");
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+				close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				end = 1; // stop receiver thread
+				printf("Server shutdown!\n");
 			} else {
 				is_control_msg = 0;
 			}
@@ -88,13 +99,35 @@ void* receiver_thread(void* args) {
     			printf("You are banned to start a new chat by admin");
     		} else if(strcmp(token[0], MSG_RECEIVING_FILE) == 0) {
     			g_state = TRANSFERING;
-    		} else {
+
+    			if(count != 2) {
+    				printf("Incorrect file name\n");
+    			}
+    			receive_file(token[1]);
+    		} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
+				printf("Server will be shutdown in 10 seconds!\n");
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+				close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				end = 1; // stop receiver thread
+				printf("Server shutdown\n");
+			} else {
     			is_control_msg = 0;
     		}
     		break;
     	case TRANSFERING:
-    		// TODO: implement control msg for TRANSFERING state
-    		is_control_msg = 0;
+    		if(strcmp(token[0], MSG_TRANSFER_COMPLETE) == 0) {
+    			/* close the file, reset file pointer */
+    			if(g_fileOpened) {
+    				fclose(g_FP);
+    				g_FP = NULL;
+    			}
+    			g_state = CHATTING;
+    			printf("File transfer success!\n");
+    		} else {
+    			is_control_msg = 0;
+    		}
     		break;
     	default:
     		break;
@@ -107,6 +140,9 @@ void* receiver_thread(void* args) {
 		int i;
 		for (i = 0; i < count; i++) {
 			free(token[i]);
+		}
+		if (end) {
+			break;
 		}
     }
 	return 0;
@@ -239,26 +275,24 @@ int handle_quit(int sockfd) {
 	return 0;
 }
 
-//TODO save file in the current directory
-int recieve_file(const char * input_file) {
+int receive_file(const char * input_file) {
 
 	int bytesReceived = 0;
 	char recvBuff[256];
 
-	/* Create file where data will be stored */
-	FILE *fp;
-	fp = fopen(input_file, "ab");
-	if (NULL == fp) {
-		printf("Error opening file");
-		return -1;
+	if(!g_fileOpened) {
+		g_FP = fopen(input_file, "ab");
+		if (NULL == g_FP) {
+			printf("Error opening file");
+			return -1;
+		}
+		g_fileOpened = 1;
 	}
 
 	/* Receive data in chunks of 256 bytes */
 	while ((bytesReceived = read(g_sockfd, recvBuff, 256)) > 0) {
 		printf("Bytes received %d\n", bytesReceived);
-		// recvBuff[n] = 0;
-		fwrite(recvBuff, 1, bytesReceived, fp);
-		// printf("%s \n", recvBuff);
+		fwrite(recvBuff, 1, bytesReceived, g_FP);
 	}
 
 	if (bytesReceived < 0) {
@@ -287,6 +321,13 @@ int send_file(const char * input_file) {
 		printf("File open error");
 		return 1;
 	}
+	char buf[BUF_MAX];
+	sprintf(buf, "%s:%s", MSG_SENDING_FILE, input_file);
+	if(send(g_sockfd, buf, strlen(buf), 0) == -1) {
+		printf("Could not send the file.\n");
+	}
+
+	g_state = TRANSFERING;
 
 	/* Read data from file and send it */
 	while (1) {
@@ -301,18 +342,19 @@ int send_file(const char * input_file) {
 			write(g_sockfd, buff, nread);
 		}
 
-		/*
-		 * There is something tricky going on with read ..
-		 * Either there was error, or we reached end of file.
-		 */
 		if (nread < 256) {
-			if (feof(fp))
+			if (feof(fp)) {
 				printf("End of file\n");
-			if (ferror(fp))
+			} if (ferror(fp)) {
 				printf("Error reading\n");
-			break;
+			} break;
 		}
 
+	}
+
+	fclose(fp);
+	if(send(g_sockfd, MSG_TRANSFER_COMPLETE, strlen(MSG_TRANSFER_COMPLETE), 0) == -1) {
+		printf("Could not send transfer completion message.\n");
 	}
 
 	return 0;

@@ -13,7 +13,10 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <pthread.h>
 
 #include "common.h"
 #include "control_msg.h"
@@ -23,7 +26,9 @@
 server_state_t g_state =  SERVER_INIT;
 struct client_info* g_clients[CLIENT_MAX]; // chat queue
 fd_set g_bitmap;  // bitmap for chat channel
+fd_set g_master;  // global socket map
 long g_useid = 0;  // global user id
+pthread_t g_connector;
 
 void sigchld_handler(int s) {
 	while(waitpid(-1, NULL, WNOHANG) > 0);
@@ -107,38 +112,8 @@ void cleanup() {
 	}
 }
 
-/* return 0 if connection sets up, otherwise return -1 */
-int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
-		struct client_info *clients [], fd_set *bitmap) {
-    int new_fd;
-	socklen_t addrlen;
-	struct sockaddr_storage their_addr; // connector's address information
-	char remoteIP[INET6_ADDRSTRLEN];
-	
-	addrlen = sizeof their_addr;
-	new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-					&addrlen);
-	if (new_fd == -1) {
-		perror("accept() fails");
-		return -1;
-	} else {
-		FD_SET(new_fd, master); // add to master set
-		if (new_fd > *fdmax) {
-			*fdmax = new_fd; // keep track of the max
-		}
-		inet_ntop(their_addr.ss_family,
-				get_in_addr((struct sockaddr *)&their_addr),
-				remoteIP, sizeof remoteIP);
-		printf("selectserver: new connection from %s on "
-			   "socket %d\n", remoteIP, new_fd);
-		
-		// Acks client and increment current index
-		return send_ack(new_fd, clients, bitmap);
-	}
-}
-
 /* Generate a new client node */
-int get_new_client(int sockfd, struct client_info **node) {
+int create_client(int sockfd, struct client_info **node) {
 	char *name;
 	int index;
 
@@ -174,6 +149,13 @@ int get_new_client(int sockfd, struct client_info **node) {
 	return index;
 }
 
+void destroy_client(struct client_info ** client) {
+	free((*client)->name);
+	(*client)->name = NULL;
+	free(*client);
+	*client = NULL;
+}
+
 // add client to chat queue, then ack back
 // TODO: synchronization
 int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
@@ -181,7 +163,7 @@ int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
 	struct client_info *client;
 
 	/* add new client to chat queue */
-	int index = get_new_client(sockfd, &client);
+	int index = create_client(sockfd, &client);
 	if (index == -1) {
 		return -1;
 	}
@@ -261,6 +243,36 @@ struct client_info* find_partner(int sockfd,
     return self;
 }
 
+/* return 0 if connection sets up, otherwise return -1 */
+int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
+		struct client_info *clients [], fd_set *bitmap) {
+    int new_fd;
+	socklen_t addrlen;
+	struct sockaddr_storage their_addr; // connector's address information
+	char remoteIP[INET6_ADDRSTRLEN];
+
+	addrlen = sizeof their_addr;
+	new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
+					&addrlen);
+	if (new_fd == -1) {
+		perror("accept() fails");
+		return -1;
+	} else {
+		FD_SET(new_fd, master); // add to g_master set
+		if (new_fd > *fdmax) {
+			*fdmax = new_fd; // keep track of the max
+		}
+		inet_ntop(their_addr.ss_family,
+				get_in_addr((struct sockaddr *)&their_addr),
+				remoteIP, sizeof remoteIP);
+		printf("selectserver: new connection from %s on "
+			   "socket %d\n", remoteIP, new_fd);
+
+		// Acks client and increment current index
+		return send_ack(new_fd, clients, bitmap);
+	}
+}
+
 struct client_info * handle_chat_request(int sockfd, fd_set *master,
 		struct client_info *clients [], fd_set *bitmap)
 {
@@ -294,6 +306,18 @@ struct client_info * handle_chat_request(int sockfd, fd_set *master,
 	}
 	partner->state = CHATTING;
 	return partner;
+}
+
+void handle_transfer(const char * file_name, struct client_info *client, struct client_info *partner) {
+
+	client->state = TRANSFERING;
+	partner->state = TRANSFERING;
+
+	char buf[BUF_MAX];
+	sprintf(buf, "%s:%s", MSG_RECEIVING_FILE, file_name);
+	if (send(partner->sockfd, buf, sizeof(buf), 0) == -1) {
+		perror("Receiving file fails");
+	}
 }
 
 void handle_help(struct client_info *client) {
@@ -448,9 +472,61 @@ void handle_unblock(char *username) {
 	printf("'%s' is not found in chat queue\n", username);
 }
 
+void handle_end(int signum)
+{
+	int i;
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_bitmap)) {
+			struct client_info * client = g_clients[i];
+			if (send(client->sockfd, MSG_SERVER_STOP, strlen(MSG_SERVER_STOP), 0) == -1) {
+				perror("send end timer fails");
+			}
+			close(client->sockfd); // close socket();
+			destroy_client(&client);
+
+		}
+	}
+	FD_ZERO(&g_bitmap);
+	pthread_kill(g_connector, SIGUSR1); // send a user define signal to kill thread
+	g_state = SERVER_INIT;
+	printf("Shutdown server successfully\n");
+}
+
+void handle_grace_period() {
+	int i;
+	char msg[] = "Server will be shutdown in 10 seconds!";
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_bitmap)) {
+			struct client_info * client = g_clients[i];
+			if (send(client->sockfd, MSG_GRACE_PERIOD, strlen(MSG_GRACE_PERIOD), 0) == -1) {
+				perror("send grace period timer fails");
+			}
+		}
+	}
+
+	struct itimerval timer;
+	struct sigaction sa;
+	/* Install timer_handler as the signal handler for SIGVTALRM. */
+	memset (&sa, 0, sizeof (sa));
+	sa.sa_handler = &handle_end;
+	sigaction (SIGALRM, &sa, NULL);
+
+	/* Configure the timer to expire after 10 second... */
+	timer.it_value.tv_sec = GRACE_PERIOD_SECONDS;
+	timer.it_value.tv_usec = 0;
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = 0;
+	if (setitimer(ITIMER_REAL, &timer, NULL) < 0) {
+		perror("set grace period timer fails");
+		return;
+	}
+	g_state = GRACE_PERIOD;
+	printf("Server will be shutdown in %d seconds!\n", GRACE_PERIOD_SECONDS);
+}
+
 int forward_chat_message(struct client_info *partner, char *buf) {
 	// forwarding packet from client to partner
-	if (send_all(partner->sockfd, buf, BUF_MAX) == -1) {
+	if (send_all_packets(partner->sockfd, buf, BUF_MAX) == -1) {
 		perror("forward_chat_message");
 		return -1;
 	}
@@ -459,7 +535,7 @@ int forward_chat_message(struct client_info *partner, char *buf) {
 }
 
 /* Helper function */
-int send_all(int socket, void *buffer, size_t length)
+int send_all_packets(int socket, void *buffer, size_t length)
 {
     char *ptr = (char*) buffer;
     while (length > 0)
@@ -475,7 +551,7 @@ int send_all(int socket, void *buffer, size_t length)
 }
 
 /* sends the file the sockfd, input file */
-int send_file(int sockfd) {
+int send_file(int sockfd, const char * input_file) {
 
 	/* check file size */
 	struct stat st;
@@ -504,7 +580,7 @@ int send_file(int sockfd) {
 		/* If read was success, send data. */
 		if (nread > 0) {
 			printf("Sending \n");
-			write(g_sockfd, buff, nread);
+			write(sockfd, buff, nread);
 		}
 
 		/*
@@ -524,33 +600,31 @@ int send_file(int sockfd) {
 	return 0;
 }
 
-//TODO save file in the current directory
-int recieve_file(const char * input_file) {
+void handle_transfer_complete(struct client_info * client, struct client_info * partner) {
 
-	int bytesReceived = 0;
-	char recvBuff[256];
+	partner->state = CHATTING;
+	client->state = CHATTING;
 
-	/* Create file where data will be stored */
-	FILE *fp;
-	fp = fopen(input_file, "ab");
-	if (NULL == fp) {
-		printf("Error opening file");
-		return -1;
+	if (send(partner->sockfd, MSG_TRANSFER_COMPLETE, strlen(MSG_TRANSFER_COMPLETE), 0) == -1) {
+		perror("Send transfer complete fails");
 	}
 
-	/* Receive data in chunks of 256 bytes */
-	while ((bytesReceived = read(g_sockfd, recvBuff, 256)) > 0) {
-		printf("Bytes received %d\n", bytesReceived);
-		// recvBuff[n] = 0;
-		fwrite(recvBuff, 1, bytesReceived, fp);
-		// printf("%s \n", recvBuff);
+	if (send(client->sockfd, MSG_TRANSFER_COMPLETE, strlen(MSG_TRANSFER_COMPLETE), 0) == -1) {
+		perror("Send transfer complete fails");
 	}
 
-	if (bytesReceived < 0) {
-		printf("\n Read Error \n");
-	}
 
-	return 0;
+}
+
+void kill_thread(int signum) {
+	int i;
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_master)) {
+			close(i);
+		}
+	}
+	FD_ZERO(&g_master);
+	pthread_exit(NULL);
 }
 
 void * main_loop(void * arg) {
@@ -570,11 +644,17 @@ void * main_loop(void * arg) {
 
 	g_state = SERVER_RUNNING;
 
-    // add the listener to the master set
+    // add the listener to the g_master set
     FD_SET(listener_fd, &master);
 
 	// keep track of the biggest file descriptor
 	fdmax = listener_fd;
+
+	struct sigaction sa;
+	/* Install timer_handler as the signal handler for SIGVTALRM. */
+	memset (&sa, 0, sizeof (sa));
+	sa.sa_handler = &kill_thread;
+	sigaction (SIGUSR1, &sa, NULL);
 
 	while(1) {  
 	    read_fds = master; // copy it
@@ -602,7 +682,7 @@ void * main_loop(void * arg) {
 					}
 
 					int nbytes;
-				    char buf[BUF_MAX]; // buffer for client data
+				    char *buf = malloc(BUF_MAX); // buffer for client data
 					if ((nbytes = recv(i, buf, BUF_MAX - 1, 0)) <= 0) {
 						// got error or connection closed by client
 						if (nbytes == 0) {
@@ -612,13 +692,23 @@ void * main_loop(void * arg) {
 							perror("recv() client data fails");
 						}
 						close(i); // bye!
-						FD_CLR(i, &master); // remove from master set
+						FD_CLR(i, &master); // remove from g_master set
 						continue;
 					} else {
 						buf[nbytes] = '\0';
 						printf("receive '%s' from %s[socket %d]\n", buf, client->name, client->sockfd);
+
+						char *token;
+						char *params[PARAMS_MAX];
+						int count = 0;
+
+						while ((token = strsep(&buf, ":")) != NULL) {
+							params[count] = strdup(token);
+							count++;
+						}
+
 						/* handle help first */
-						if (strcmp(buf, HELP) == 0) {
+						if (strcmp(params[0], HELP) == 0) {
 							handle_help(client);
 							continue;
 						}
@@ -627,9 +717,9 @@ void * main_loop(void * arg) {
 						case INIT:
 							break;
 						case CONNECTING:
-							if (strcmp(buf, EXIT) == 0) {
+							if (strcmp(params[0], EXIT) == 0) {
 								handle_exit(client, NULL, &g_bitmap);
-							} else if (strcmp(buf, MSG_CHAT_REQUEST) == 0) {
+							} else if (strcmp(params[0], MSG_CHAT_REQUEST) == 0) {
 								// if client request to chat, server will allocate a partner first
 								handle_chat_request(i, &master, g_clients, &g_bitmap);
 								break;
@@ -638,29 +728,42 @@ void * main_loop(void * arg) {
 						case CHATTING:
 						{
                             struct client_info *partner = g_clients[client->partner_index];
-                            if (strcmp(buf, EXIT) == 0) {
+                            if (strcmp(params[0], EXIT) == 0) {
                             	handle_exit(client, partner, &g_bitmap);
-                            } else if (strcmp(buf, QUIT) == 0) {
+                            } else if (strcmp(params[0], QUIT) == 0) {
 								handle_quit(client, partner);
+                            } else if (strcmp(params[0], MSG_SENDING_FILE) == 0) {
+                            	if(count != 2) {
+                            		printf("Invalid control message.\n");
+                            	}
+                            	handle_transfer(params[1], client, partner);
+
+
                             } else {
-                            	forward_chat_message(partner, buf);
+                            	forward_chat_message(partner, params[0]);
                             }
 							break;
 						}
 						case TRANSFERING:
+						{
 							struct client_info *partner = g_clients[client->partner_index];
-							// receive file
-							recieve_file();
 
-							// send file to partner
-							send_file(partner->sockfd);
-
+							if(strcmp(params[0], MSG_TRANSFER_COMPLETE) == 0) {
+								handle_transfer_complete(client, partner);
+							} else {
+								forward_chat_message(partner, params[0]);
+							}
 							break;
+						}
 						default:
 							break;
 						}
-
+						int k;
+						for(k = 0; k < count; k++) {
+							free(params[k]);
+						}
 					}
+					free(buf);
 				}
 			}
 		}
@@ -682,13 +785,11 @@ void print_help() {
 	printf("%-10s - print help information.\n", HELP);
 }
 
-
 void parse_control_command(char * cmd) {
 	char *params[PARAMS_MAX];
 	char *token;
 	char delim[2] = " ";
 	int count = 0;
-	pthread_t connector;
 
 	while ((token = strsep(&cmd, delim)) != NULL) {
 		params[count] = strdup(token);
@@ -703,11 +804,10 @@ void parse_control_command(char * cmd) {
 			strcmp(params[0], UNBLOCK) == 0) {
 			printf("You need start server first\n");
 		} else if (strcmp(params[0], START) == 0) {
-			pthread_create(&connector, NULL, &main_loop, NULL);
+			pthread_create(&g_connector, NULL, &main_loop, NULL);
 		} else if (strcmp(params[0], END) == 0) {
 			/* server has not started yet, don't need grace period */
-			printf("Shutdown server successfully\n");
-			exit(1);
+			printf("Server hasn't started yet\n");
 		} else if (strcmp(params[0], HELP) == 0) {
 			print_help();
 		} else {
@@ -716,7 +816,7 @@ void parse_control_command(char * cmd) {
 		break;
 	case SERVER_RUNNING:
 		if (strcmp(params[0], STATS) == 0) {
-			handle_stat(g_clients);
+			handle_stat();
 		} else if (strcmp(params[0], CHAT) == 0) {
 			// TODO: Should admin able to talk with other clients?
 		} else if (strcmp(params[0], THROWOUT) == 0) {
@@ -740,7 +840,7 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], START) == 0) {
 			printf("Server has already started.\n");
 		} else if (strcmp(params[0], END) == 0) {
-			//to be implemented
+			handle_grace_period();
 		} else if (strcmp(params[0], HELP) == 0) {
 			print_help();
 		} else {
