@@ -1,3 +1,7 @@
+/*
+ * control_msg.h - contains macros for all control messages the TRS and client utilize
+ */
+
 #ifndef __CONTROL_MSG_H__
 #define __CONTROL_MSG_H__
 

@@ -1,6 +1,7 @@
 /*
- * ** client.c -- a stream socket client demo
- * */
+ * client.c - Client program that lets the user connect to the Text Chat Roullette
+ * server and chat with other members
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 #include "common.h"
 #include "control_msg.h"
 
+/* global variables for the client */
 client_state_t g_state = INIT;
 int g_sockfd = 0;
 char *g_partner_name = NULL;
@@ -27,13 +29,7 @@ char *g_client_name = NULL;
 int g_fileOpened = 0;
 FILE *g_FP;
 
-//TODO: implement Ctrl+C signal handler in both cliend and server
-//TODO: chat is not working right now
-//TODO: type a string more than 256 characters could be a issue
-//TODO: all capital letter become lower case on the other end (done)
-//TODO: implement help on server side
-
-// get sockaddr, IPv4 or IPv6:
+/* get sockaddr, IPv4 or IPv6 */
 void *get_in_addr(struct sockaddr *sa) {
     if (sa->sa_family == AF_INET) {
         return &(((struct sockaddr_in*)sa)->sin_addr);
@@ -41,6 +37,7 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+/* handles messages recieved from the server and contains state machine for the client */
 void* receiver_thread(void* args) {
 	int numbytes;
 	char *token[PARAMS_MAX];
@@ -142,7 +139,8 @@ void* receiver_thread(void* args) {
 	return 0;
 }
 
-/* return sockfd if success, otherwise -1 */
+/* handler for the connnect command
+ * return sockfd if success, otherwise -1 */
 int handle_connect(char *hostname, char *port) {
     // TODO: use hostname instead of ip address
 	int sockfd, numbytes;
@@ -218,7 +216,8 @@ int handle_connect(char *hostname, char *port) {
 
 }
 
-/* return 0 for success, otherwise -1 */
+/* handler for the chat command
+ * return 0 for success, otherwise -1 */
 int handle_chat(int sockfd) {
 	int numbytes;
 	char buf[BUF_MAX];
@@ -235,6 +234,7 @@ int handle_chat(int sockfd) {
 	return 0;
 }
 
+/* sends text to the chat partner */
 int send_text(int sockfd, char * text) {
 	if (sockfd == -1) {
 		printf("Error: You need connect to server first.\n");
@@ -247,12 +247,14 @@ int send_text(int sockfd, char * text) {
 	return 0;
 }
 
+/* request help messages from server */
 void request_help() {
 	if (send(g_sockfd, MSG_HELP, sizeof(MSG_HELP), 0) == 0) {
 		perror("send help request fails");
 	}
 }
 
+/* handler for the client quitting the chat channel */
 int handle_quit(int sockfd) {
 	if (sockfd == -1) {
 		printf("Error: You need connect to server first.\n");
@@ -274,6 +276,7 @@ int handle_flag() {
 	return 0;
 }
 
+/* handler for receiving a file */
 int receive_file(const char * input_file) {
 
 	int bytesReceived = 0;
@@ -363,11 +366,11 @@ int send_file(const char * input_file) {
 		/* First read file in chunks of 256 bytes */
 		unsigned char buff[BUF_MAX] = { 0 };
 		int nread = fread(buff, 1, BUF_MAX, fp);
-//		printf("Bytes read %d \n", nread);
+		// printf("Bytes read %d \n", nread);
 
 		/* If read was success, send data. */
 		if (nread > 0) {
-//			printf("Sending '%s'\n", buff);
+			// printf("Sending '%s'\n", buff);
 			write(g_sockfd, buff, nread);
 		}
 
@@ -391,6 +394,7 @@ int send_file(const char * input_file) {
 	return 0;
 }
 
+/* parses commands entered by the client */
 void parse_control_command(char * cmd) {
 	char *params[PARAMS_MAX];
 	char *token;
@@ -500,6 +504,7 @@ void parse_control_command(char * cmd) {
 
 }
 
+/* main loop for the client program */
 int main(int argc, char *argv[])
 {
 	char user_input[BUF_MAX];
@@ -514,9 +519,6 @@ int main(int argc, char *argv[])
 		printf("%s> ", g_client_name == NULL ? "" : g_client_name); // prompt
 		fgets(user_input, BUF_MAX, stdin);
 		user_input[strlen(user_input) - 1] = '\0';
-//		for (i = 0; user_input[i] != '\0'; i++) {
-//			user_input[i] = tolower(user_input[i]);
-//		}
 
 		input_copy = strdup(user_input); // copy user input
 		if (input_copy[0] == '/') {
