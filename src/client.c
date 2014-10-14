@@ -26,7 +26,6 @@ client_state_t g_state = INIT;
 int g_sockfd = 0;
 char *g_partner_name = NULL;
 char *g_client_name = NULL;
-int g_fileOpened = 0;
 FILE *g_FP;
 
 /* get sockaddr, IPv4 or IPv6 */
@@ -102,7 +101,7 @@ void* receiver_thread(void* args) {
     			if(count != 2) {
     				printf("Incorrect file name\n");
     			}
-    			receive_file(token[1]);
+    			open_file(token[1]);
     		} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
 				printf("Server will be shutdown in 10 seconds!\n");
 			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
@@ -124,7 +123,11 @@ void* receiver_thread(void* args) {
 				printf("Client quits because server shutdown\n");
 				return NULL;
     		} else {
-    			is_control_msg = 0;
+    			if (count == 1) {
+    				receive_file(token[0], NULL);
+    			} else if (count == 2) {
+    				receive_file(token[0], token[1]);
+    			}
     		}
     		break;
     	default:
@@ -281,48 +284,39 @@ int handle_flag() {
 	return 0;
 }
 
-/* handler for receiving a file */
-int receive_file(const char * input_file) {
+/* handler for opening a file */
+int open_file(const char * input_file) {
 
 	int bytesReceived = 0;
 	char recvBuff[BUF_MAX + 1];
 
-	if(!g_fileOpened) {
-		char filepath[BUF_MAX];
-		sprintf(filepath, "recv/%s", input_file);
-		g_FP = fopen(filepath, "w");
-		if (NULL == g_FP) {
-			printf("Error opening file");
-			return -1;
-		}
-		g_fileOpened = 1;
+	char filepath[BUF_MAX];
+	sprintf(filepath, "recv/%s", input_file);
+	g_FP = fopen(filepath, "w");
+	if (NULL == g_FP) {
+		printf("Error opening file");
+		return -1;
 	}
 
+	return 0;
+}
+
+int receive_file(char * filebuf, char * msg_transfer_complete) {
+
 	/* Receive data in chunks of 256 bytes */
-	while ((bytesReceived = read(g_sockfd, recvBuff, BUF_MAX)) > 0) {
-		recvBuff[bytesReceived + 1] = '\0';
+	if (filebuf) {
+		fwrite(filebuf, 1, strlen(filebuf), g_FP);
 		/* search for completion flag inside chunk */
-		char *trans_complete = strstr(recvBuff, MSG_TRANSFER_COMPLETE);
-		if (trans_complete) {
-			char subbuf[BUF_MAX] = {0};
-			int length = trans_complete - recvBuff;
-			memcpy(subbuf, recvBuff, length);
-			fwrite(subbuf, 1, length, g_FP);
+		if (msg_transfer_complete) {
 			fclose(g_FP);
 			g_FP = NULL;
-			g_fileOpened = 0;
 			g_state = CHATTING;
 			if (send(g_sockfd, MSG_RECEIVE_SUCCESS, strlen(MSG_RECEIVE_SUCCESS), 0) == -1) {
 				perror("response receive success fails");
 			}
 			printf("File transfer success!\n");
-			break;
 		}
-		fwrite(recvBuff, 1, bytesReceived, g_FP);
-		memset(recvBuff, 0, bytesReceived + 1);
-	}
-
-	if (bytesReceived < 0) {
+	} else {
 		printf("\n Read Error \n");
 	}
 
