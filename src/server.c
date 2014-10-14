@@ -1,5 +1,5 @@
 /*
- ** server.c -- a stream socket server demo
+ * server.c - Chat server for the Text ChatRoullette program
  */
 
 #include <stdio.h>
@@ -21,8 +21,7 @@
 #include "common.h"
 #include "control_msg.h"
 
-//TODO: refactor server to accomodate admin role.
-
+/* global variables for the server */
 server_state_t g_state =  SERVER_INIT;
 struct client_info* g_clients[CLIENT_MAX]; // chat queue
 fd_set g_bitmap;  // bitmap for chat channel
@@ -30,11 +29,12 @@ fd_set g_master;  // global socket map
 long g_useid = 0;  // global user id
 pthread_t g_connector;
 
+/* used by cleanup() to handle children */
 void sigchld_handler(int s) {
 	while(waitpid(-1, NULL, WNOHANG) > 0);
 }
 
-// get sockaddr, IPv4 or IPv6:
+/* get sockaddr, IPv4 or IPv6 */
 void *get_in_addr(struct sockaddr *sa) {
 	if (sa->sa_family == AF_INET) {
 		return &(((struct sockaddr_in*)sa)->sin_addr);
@@ -43,8 +43,8 @@ void *get_in_addr(struct sockaddr *sa) {
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-// Create a socket and listen on it
-// return sockfd if success, otherwise client will exit. 
+/* Create a socket and listen on it
+ * return sockfd if success, otherwise client will exit. */
 int setup() {
 	struct addrinfo hints, *servinfo, *p;
 	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
@@ -100,6 +100,7 @@ int setup() {
 	return sockfd;
 }
 
+/* cleans up current processes */
 void cleanup() {
 	struct sigaction sa;
 	
@@ -149,6 +150,7 @@ int create_client(int sockfd, struct client_info **node) {
 	return index;
 }
 
+/* destroys the current client */
 void destroy_client(struct client_info ** client) {
 	free((*client)->name);
 	(*client)->name = NULL;
@@ -156,8 +158,7 @@ void destroy_client(struct client_info ** client) {
 	*client = NULL;
 }
 
-// add client to chat queue, then ack back
-// TODO: synchronization
+/* add client to chat queue, then ack back */
 int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
 	char ack[BUF_MAX];
 	struct client_info *client;
@@ -177,6 +178,7 @@ int send_ack(int sockfd, struct client_info * clients[], fd_set *bitmap) {
 	return 0;
 }
 
+/* finds a chat partner for the client */
 struct client_info* find_partner(int sockfd,
 		struct client_info *clients[], fd_set *bitmap)
 {
@@ -273,6 +275,7 @@ int handle_new_connection(int sockfd, int *fdmax, fd_set *master,
 	}
 }
 
+/* handler for chat requests */
 struct client_info * handle_chat_request(int sockfd, fd_set *master,
 		struct client_info *clients [], fd_set *bitmap)
 {
@@ -308,6 +311,7 @@ struct client_info * handle_chat_request(int sockfd, fd_set *master,
 	return partner;
 }
 
+/* handler for transfering files */
 void handle_transfer(const char * file_name, struct client_info *client, struct client_info *partner) {
 
 	char buf[BUF_MAX];
@@ -325,10 +329,12 @@ void handle_transfer(const char * file_name, struct client_info *client, struct 
 	partner->state = TRANSFERING;
 }
 
+/* handler for the help command */
 void handle_help(struct client_info *client) {
     // to be implemented
 }
 
+/* handler for a client exiting the program */
 void handle_exit(struct client_info * client,
 	struct client_info *partner, fd_set *bitmap) {
 	FD_CLR(client->partner_index, bitmap);
@@ -339,6 +345,7 @@ void handle_exit(struct client_info * client,
 	free(client);
 }
 
+/* handler for the client quitting the current chat channel */
 void handle_quit(struct client_info *client, struct client_info *partner) {
 	partner->partner_index = -1;
 	client->partner_index = -1;
@@ -352,7 +359,7 @@ void handle_quit(struct client_info *client, struct client_info *partner) {
 	}
 }
 
-/* write stat to a file */
+/* write stats to a file */
 void handle_stat() {
 	int i;
 	int client_num = 0; /* number of clients in chat queue*/
@@ -443,6 +450,7 @@ void handle_throwout(char * username) {
 	printf("'%s' is not found in chat queue\n", username);
 }
 
+/* handler for the blocking of a user */
 void handle_block(char *username) {
 	int i;
 	for (i = 0; i < CLIENT_MAX; i++) {
@@ -460,6 +468,7 @@ void handle_block(char *username) {
 	printf("'%s' is not found in chat queue\n", username);
 }
 
+/* handler for unblocking a user */
 void handle_unblock(char *username) {
 	int i;
 	for (i = 0; i < CLIENT_MAX; i++) {
@@ -477,6 +486,7 @@ void handle_unblock(char *username) {
 	printf("'%s' is not found in chat queue\n", username);
 }
 
+/* handler for ending the TRS*/
 void handle_end(int signum)
 {
 	int i;
@@ -497,6 +507,7 @@ void handle_end(int signum)
 	printf("Shutdown server successfully\n");
 }
 
+/* handler for when the server ends the TRS */
 void handle_grace_period() {
 	int i;
 	char msg[] = "Server will be shutdown in 10 seconds!";
@@ -529,6 +540,7 @@ void handle_grace_period() {
 	printf("Server will be shutdown in %d seconds!\n", GRACE_PERIOD_SECONDS);
 }
 
+/* forwards a message from the server to the partner */
 int forward_message(struct client_info *partner, char *buf) {
 	// forwarding packet from client to partner
 	if (send_all_packets(partner->sockfd, buf, BUF_MAX) == -1) {
@@ -605,11 +617,13 @@ int send_file(int sockfd, const char * input_file) {
 	return 0;
 }
 
+/* handler for file transfer completion */
 void handle_transfer_complete(struct client_info *client, struct client_info *partner) {
 	partner->state = CHATTING;
 	client->state = CHATTING;
 }
 
+/* kills a current thread */
 void kill_thread(int signum) {
 	int i;
 	for (i = 0; i < CLIENT_MAX; i++) {
@@ -621,6 +635,7 @@ void kill_thread(int signum) {
 	pthread_exit(NULL);
 }
 
+/* main loop to be executed, handles the state transition */
 void * main_loop(void * arg) {
     int listener_fd;
 	int fdmax;
@@ -759,6 +774,7 @@ void * main_loop(void * arg) {
 	return 0;
 }
 
+/* prints all help commands */
 void print_help() {
 	printf("%-10s - list following information: \n"
 			"\t\t[1] number of clients in chat queue,\n"
@@ -773,6 +789,7 @@ void print_help() {
 	printf("%-10s - print help information.\n", HELP);
 }
 
+/* parses control commands entered by the admin */
 void parse_control_command(char * cmd) {
 	char *params[PARAMS_MAX];
 	char *token;
@@ -843,6 +860,7 @@ void parse_control_command(char * cmd) {
 
 }
 
+/* main function */
 int main(void) {
     int listener_fd;
 	int fdmax;
@@ -856,7 +874,7 @@ int main(void) {
 	char user_input[BUF_MAX];
 
 	// reap all dead processes
-	cleanup();
+//	cleanup();
 
 	print_ascii_art();
 

@@ -1,3 +1,7 @@
+/*
+ * common.h - contains constants, functions, and structs used by the client and server
+ */
+
 #ifndef __COMMON_H__
 #define __COMMON_H__
 
