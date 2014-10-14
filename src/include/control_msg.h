@@ -24,6 +24,7 @@
 #define MSG_FLAG "##flag"
 #define MSG_RECEIVE_FLAG "##receive_flag"
 #define MSG_HELP "##request_help"
+#define MSG_SERVER_SHUTDOWN "##server_exit"
 
 // supported client commands
 #define CONNECT "/connect"

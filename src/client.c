@@ -44,7 +44,6 @@ void* receiver_thread(void* args) {
 	char *str;
 	int sockfd = *(int *)args;
 	int is_control_msg = 1; /* flag */
-	int end = 0;
 
 	while(1) {
 		char * buf = malloc(BUF_MAX + 1);
@@ -71,13 +70,13 @@ void* receiver_thread(void* args) {
 				printf("Your name is removed from block list");
 			} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
 				printf("Server will be shutdown in 10 seconds!\n");
-			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
+					strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
 				close(g_sockfd); // close server socket
 				g_sockfd = 0;
 				g_state = INIT;
-				end = 1; // stop receiver thread
-				printf("Server shutdown!\n");
-				pthread_exit(NULL);
+				printf("Client quits because server shutdown\n");
+				return NULL;
 			} else {
 				is_control_msg = 0;
 			}
@@ -106,18 +105,27 @@ void* receiver_thread(void* args) {
     			receive_file(token[1]);
     		} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
 				printf("Server will be shutdown in 10 seconds!\n");
-			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0) {
+			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
+					strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
 				close(g_sockfd); // close server socket
 				g_sockfd = 0;
 				g_state = INIT;
-				end = 1; // stop receiver thread
-				printf("Server shutdown\n");
+				printf("Client quits because server shutdown\n");
+				return NULL;
 			} else {
     			is_control_msg = 0;
     		}
     		break;
     	case TRANSFERING:
-    		is_control_msg = 0;
+    		if (strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
+    			close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				printf("Client quits because server shutdown\n");
+				return NULL;
+    		} else {
+    			is_control_msg = 0;
+    		}
     		break;
     	default:
     		break;
@@ -132,9 +140,6 @@ void* receiver_thread(void* args) {
 			free(token[i]);
 		}
 		free(buf);
-		if (end) {
-			break;
-		}
     }
 	return 0;
 }
@@ -428,7 +433,7 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
-			request_help();
+			printf("Error: You need connect to server first.\n");
 		} else if (strcmp(params[0], FLAG) == 0) {
 			printf("Error: You are not in a chat session\n");
 		} else {
