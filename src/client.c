@@ -80,6 +80,7 @@ void* receiver_thread(void* args) {
 				g_state = INIT;
 				end = 1; // stop receiver thread
 				printf("Server shutdown!\n");
+				pthread_exit(NULL);
 			} else {
 				is_control_msg = 0;
 			}
@@ -127,12 +128,13 @@ void* receiver_thread(void* args) {
 
     	/* skip empty message */
 		if (!is_control_msg && strcmp(token[0], "") != 0) {
-			printf("\n<%s>: %s\n", g_partner_name, token[0]);
+			printf("\n%s\n", token[0]);
 		}
 		int i;
 		for (i = 0; i < count; i++) {
 			free(token[i]);
 		}
+		free(buf);
 		if (end) {
 			break;
 		}
@@ -177,8 +179,8 @@ int handle_connect(char *hostname, char *port) {
     }
 
     if (p == NULL) {
-        fprintf(stderr, "client: failed to connect\n");
-        exit(1);
+        printf("failed to connect server\n");
+        return -1;
     }
 
     inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
@@ -245,14 +247,10 @@ int send_text(int sockfd, char * text) {
 	return 0;
 }
 
-void print_help() {
-	printf("%-10s - connect to TRS server.\n", CONNECT);
-	printf("%-10s - chat with a random client in the common chat channel.\n", CHAT);
-	printf("%-10s - transfer file to current chatting partner.\n", TRANSFER);
-	printf("%-10s - report to TRS server current chatting partner is misbehaving\n", FLAG);
-	printf("%-10s - print help information.\n", HELP);
-	printf("%-10s - quit current channel.\n", QUIT);
-	printf("%-10s - quit client.\n", EXIT);
+void request_help() {
+	if (send(g_sockfd, MSG_HELP, sizeof(MSG_HELP), 0) == 0) {
+		perror("send help request fails");
+	}
 }
 
 int handle_quit(int sockfd) {
@@ -264,6 +262,15 @@ int handle_quit(int sockfd) {
 		perror("send QUIT fails");
 		return -1;
 	}
+	return 0;
+}
+
+int handle_flag() {
+	if (send(g_sockfd, MSG_FLAG, sizeof(MSG_FLAG), 0) == -1) {
+		perror("send flag fails");
+		return -1;
+	}
+	printf("send flag to server successfully\n");
 	return 0;
 }
 
@@ -404,6 +411,9 @@ void parse_control_command(char * cmd) {
 				return;
 			}
 			g_sockfd = handle_connect(params[1], PORT);
+			if (g_sockfd == -1) {
+				return;
+			}
 			pthread_create(&receiver, NULL, &receiver_thread, (void *)&g_sockfd);
 		} else if (strcmp(params[0], CHAT) == 0) {
 			printf("Error: You need connect to server first.\n");
@@ -414,9 +424,9 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
-			print_help();
+			request_help();
 		} else if (strcmp(params[0], FLAG) == 0) {
-			//to be implemented
+			printf("Error: You are not in a chat session\n");
 		} else {
 			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
 		}
@@ -433,9 +443,9 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
-			print_help();
+			request_help();
 		} else if (strcmp(params[0], FLAG) == 0) {
-			//to be implemented
+			printf("Error: You are not in a chat session\n");
 		} else {
 			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
 		}
@@ -457,9 +467,9 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
-			print_help();
+			request_help();
 		} else if (strcmp(params[0], FLAG) == 0) {
-			//to be implemented
+			handle_flag();
 		} else {
 			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
 		}
@@ -476,9 +486,9 @@ void parse_control_command(char * cmd) {
 		} else if (strcmp(params[0], EXIT) == 0) {
 			exit(1);
 		} else if (strcmp(params[0], HELP) == 0) {
-			print_help();
+			request_help();
 		} else if (strcmp(params[0], FLAG) == 0) {
-			//to be implemented
+			handle_flag();
 		} else {
 			printf("%s: Command not found. Type '%s' for more information.\n", params[0], HELP);
 		}

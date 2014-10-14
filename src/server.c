@@ -326,7 +326,32 @@ void handle_transfer(const char * file_name, struct client_info *client, struct 
 }
 
 void handle_help(struct client_info *client) {
-    // to be implemented
+	char buf[512];
+	sprintf(buf, "%-10s - connect to TRS server.\n"
+			"%-10s - chat with a random client in the common chat channel.\n"
+			"%-10s - transfer file to current chatting partner.\n"
+			"%-10s - report to TRS server current chatting partner is misbehaving\n"
+			"%-10s - print help information.\n"
+			"%-10s - quit current channel.\n"
+			"%-10s - quit client.\n",
+			CONNECT, CHAT, TRANSFER, FLAG, HELP, QUIT, EXIT);
+	if (send(client->sockfd, buf, strlen(buf), 0) == -1) {
+		perror("send help message fails");
+	}
+}
+
+void print_help() {
+	printf("%-10s - list following information: \n"
+			"\t\t[1] number of clients in chat queue,\n"
+			"\t\t[2] number of clients chatting currently,\n"
+			"\t\t[3] data usage for each channel being used,\n"
+			"\t\t[4] total number of users flagged chatting partners and their names and their status.\n", STATS);
+	printf("%-10s - kick out specific client from current channel.\n", THROWOUT);
+	printf("%-10s - block specific client from starting a chat.\n", BLOCK);
+	printf("%-10s - unblock specific client from ban list.\n", UNBLOCK);
+	printf("%-10s - start server.\n", START);
+	printf("%-10s - stop server with a grace period.\n", END);
+	printf("%-10s - print help information.\n", HELP);
 }
 
 void handle_exit(struct client_info * client,
@@ -348,6 +373,14 @@ void handle_quit(struct client_info *client, struct client_info *partner) {
 		perror("quit channel fails");
 	}
 	if (send(client->sockfd, MSG_QUIT, sizeof(MSG_QUIT), 0) == -1) {
+		perror("quit channel fails");
+	}
+}
+
+void handle_flag(struct client_info * partner) {
+	partner->flag++;
+	char msg[] = "Your partner reported your misbehaving to the server";
+	if (send(partner->sockfd, msg, strlen(msg), 0) == -1) {
 		perror("quit channel fails");
 	}
 }
@@ -395,9 +428,9 @@ void handle_stat() {
 			client = g_clients[i];
 			if (client->flag != 0) {
 				if (client->partner_index != -1) {
-					sprintf(status, "chatting with %s", g_clients[client->partner_index]->name);
+					sprintf(status, "chatting with %s\n", g_clients[client->partner_index]->name);
 				} else {
-					sprintf(status, "not chatting");
+					sprintf(status, "not chatting\n");
 				}
 				if (fprintf(fp, "%s: receive %d flag, %s", client->name, client->flag, status) < 0) {
 					perror("write stat file fails");
@@ -703,7 +736,7 @@ void * main_loop(void * arg) {
 
 						/* handle help first */
 						if (strcmp(params[0], HELP) == 0) {
-							handle_help(client);
+							print_help();
 							continue;
 						}
 
@@ -713,6 +746,8 @@ void * main_loop(void * arg) {
 						case CONNECTING:
 							if (strcmp(params[0], EXIT) == 0) {
 								handle_exit(client, NULL, &g_bitmap);
+							} else if (strcmp(params[0], MSG_HELP) == 0) {
+								handle_help(client);
 							} else if (strcmp(params[0], MSG_CHAT_REQUEST) == 0) {
 								// if client request to chat, server will allocate a partner first
 								handle_chat_request(i, &master, g_clients, &g_bitmap);
@@ -726,6 +761,10 @@ void * main_loop(void * arg) {
                             	handle_exit(client, partner, &g_bitmap);
                             } else if (strcmp(params[0], QUIT) == 0) {
 								handle_quit(client, partner);
+                            } else if (strcmp(params[0], MSG_HELP) == 0) {
+								handle_help(client);
+							} else if (strcmp(params[0], MSG_FLAG) == 0){
+                            	handle_flag(partner);
                             } else if (strcmp(params[0], MSG_SENDING_FILE) == 0) {
                             	handle_transfer(params[1], client, partner);
                             } else {
@@ -738,6 +777,8 @@ void * main_loop(void * arg) {
 							struct client_info *partner = g_clients[client->partner_index];
 							if (strcmp(params[0], MSG_RECEIVE_SUCCESS) == 0) {
 								handle_transfer_complete(client, partner);
+							} else if (strcmp(params[0], MSG_HELP) == 0) {
+								handle_help(client);
 							} else {
 								forward_message(partner, params[0]);
 							}
@@ -757,20 +798,6 @@ void * main_loop(void * arg) {
 		}
 	}
 	return 0;
-}
-
-void print_help() {
-	printf("%-10s - list following information: \n"
-			"\t\t[1] number of clients in chat queue,\n"
-			"\t\t[2] number of clients chatting currently,\n"
-			"\t\t[3] data usage for each channel being used,\n"
-			"\t\t[4] total number of users flagged chatting partners and their names and their status.\n", STATS);
-	printf("%-10s - kick out specific client from current channel.\n", THROWOUT);
-	printf("%-10s - block specific client from starting a chat.\n", BLOCK);
-	printf("%-10s - unblock specific client from ban list.\n", UNBLOCK);
-	printf("%-10s - start server.\n", START);
-	printf("%-10s - stop server with a grace period.\n", END);
-	printf("%-10s - print help information.\n", HELP);
 }
 
 void parse_control_command(char * cmd) {

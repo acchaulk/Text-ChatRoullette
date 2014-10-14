@@ -17,6 +17,9 @@
 #define MSG_RECEIVE_SUCCESS "##receive_success"
 #define MSG_GRACE_PERIOD "##grace_period"
 #define MSG_SERVER_STOP "##server_stop"
+#define MSG_FLAG "##flag"
+#define MSG_RECEIVE_FLAG "##receive_flag"
+#define MSG_HELP "##request_help"
 
 // supported client commands
 #define CONNECT "/connect"
