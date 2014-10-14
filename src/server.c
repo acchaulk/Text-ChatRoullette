@@ -669,6 +669,23 @@ void kill_thread(int signum) {
 	pthread_exit(NULL);
 }
 
+void exit_server(int signum) {
+	int i;
+	for (i = 0; i < CLIENT_MAX; i++) {
+		if (FD_ISSET(i, &g_bitmap)) {
+			struct client_info *client = g_clients[i];
+			if (client->state > INIT) {
+				printf("send exit_server to %s\n", client->name);
+				if (send(client->sockfd, MSG_SERVER_SHUTDOWN, strlen(MSG_SERVER_SHUTDOWN), 0) == -1) {
+					perror("notify client fails");
+				}
+			}
+		}
+	}
+	printf("exit_server\n");
+	exit(1);
+}
+
 /* main loop to be executed, handles the state transition */
 void * main_loop(void * arg) {
     int listener_fd;
@@ -696,8 +713,8 @@ void * main_loop(void * arg) {
 	struct sigaction sa;
 	/* Install timer_handler as the signal handler for SIGVTALRM. */
 	memset (&sa, 0, sizeof (sa));
-	sa.sa_handler = &kill_thread;
-	sigaction (SIGUSR1, &sa, NULL);
+	sa.sa_handler = &exit_server;
+	sigaction (SIGINT, &sa, NULL);
 
 	while(1) {  
 	    read_fds = master; // copy it
