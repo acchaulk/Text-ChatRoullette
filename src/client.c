@@ -58,7 +58,14 @@ void* receiver_thread(void* args) {
 		}
     	switch (g_state) {
     	case CONNECTING:
-			if (strcmp(token[0], MSG_IN_SESSION) == 0) {
+    		if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
+					strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
+				close(g_sockfd); // close server socket
+				g_sockfd = 0;
+				g_state = INIT;
+				printf("Client quits because server shutdown\n");
+				return NULL;
+			} else if (strcmp(token[0], MSG_IN_SESSION) == 0) {
 				/* server returns [IN_SESSION:user_name] */
 				g_state = CHATTING;
 				g_partner_name = strdup(token[1]);
@@ -69,19 +76,20 @@ void* receiver_thread(void* args) {
 				printf("Your name is removed from block list");
 			} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
 				printf("Server will be shutdown in 10 seconds!\n");
-			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
+			} else {
+				is_control_msg = 0;
+			}
+			break;
+    	case CHATTING:
+    		if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
 					strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
 				close(g_sockfd); // close server socket
 				g_sockfd = 0;
 				g_state = INIT;
 				printf("Client quits because server shutdown\n");
 				return NULL;
-			} else {
-				is_control_msg = 0;
 			}
-			break;
-    	case CHATTING:
-    		if (strcmp(token[0], MSG_QUIT) == 0) {
+    		else if (strcmp(token[0], MSG_QUIT) == 0) {
     			g_state = CONNECTING;
     			printf("You quit your current chat channel\n");
     		} else if (strcmp(token[0], MSG_BE_KICKOUT) == 0) {
@@ -104,13 +112,6 @@ void* receiver_thread(void* args) {
     			open_file(token[1]);
     		} else if (strcmp(token[0], MSG_GRACE_PERIOD) == 0) {
 				printf("Server will be shutdown in 10 seconds!\n");
-			} else if (strcmp(token[0], MSG_SERVER_STOP) == 0 ||
-					strcmp(token[0], MSG_SERVER_SHUTDOWN) == 0) {
-				close(g_sockfd); // close server socket
-				g_sockfd = 0;
-				g_state = INIT;
-				printf("Client quits because server shutdown\n");
-				return NULL;
 			} else {
     			is_control_msg = 0;
     		}
